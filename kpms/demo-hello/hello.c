@@ -12,10 +12,16 @@
 #include <accctl.h>         // For set_priv_sel_allow and related functions
 #include <uapi/linux/limits.h>   // For PATH_MAX
 #include <linux/kernel.h>   // For snprintf
-#include <linux/dcache.h>   // For d_path()
+#include <linux/path.h>     // 补充struct path定义
+#include <linux/sched.h>    // 补充struct task_struct定义（current依赖）
+
+// 补充pr_debug定义，避免隐式声明警告
+#ifndef pr_debug
+#define pr_debug(fmt, ...) pr_info("[DEBUG] " fmt, ##__VA_ARGS__)
+#endif
 
 KPM_NAME("HMA++ Next");
-KPM_VERSION("1.0.6");
+KPM_VERSION("1.5");
 KPM_LICENSE("GPLv3");
 KPM_AUTHOR("NightFallsLikeRain");
 KPM_DESCRIPTION("核心风险拦截（白名单模式）");
@@ -436,7 +442,7 @@ static const char *system_app_allow_list[] = {
     "com.android.powerofftone",          // 关机音
     "com.android.batteryofftone",        // 电池关机音
     "com.android.powerontone",           // 开机音
-    "com.android.batteryontone",         // 电池开机音
+    "com.android.batterytone",           // 电池开机音
     "com.android.powercycletone",        // 电源循环音
     "com.android.batterycycletone",      // 电池循环音
     "com.android.powerstatustone",       // 电源状态音
@@ -461,8 +467,8 @@ static const char *system_app_allow_list[] = {
     "com.android.batterylighttone",      // 电池灯音
     "com.android.powernotificationlighttone", // 电源通知灯音
     "com.android.batterynotificationlighttone", // 电池通知灯音
-    "com.android.powerflashlighttone",   // 电源闪光灯音
-    "com.android.batteryflashlighttone", // 电池闪光灯音
+    "com.android.powerflashlighttone",    // 电源闪光灯音
+    "com.android.batteryflashlighttone",  // 电池闪光灯音
     "com.android.powercameraflashtone",  // 电源相机闪光灯音
     "com.android.batterycameraflashtone", // 电池相机闪光灯音
     "com.android.powertorchtonetone",    // 电源手电筒音
@@ -732,21 +738,24 @@ static const char *allow_folder_list[] = {
 };
 #define ALLOW_FOLDER_SIZE (sizeof(allow_folder_list)/sizeof(allow_folder_list[0]))
 
-// 判断当前进程是否为/system路径下的应用（核心新增逻辑）
+// 判断当前进程是否为/system路径下的应用（修复版：使用内核标准函数，避免框架依赖）
 static int is_system_path_app(void) {
     char exe_path[PATH_MAX];
-    struct path exe;
     int ret;
 
-    // 获取当前进程的可执行文件路径
-    get_fs_path(&current->mm->exe_file->f_path, &exe);
-    ret = d_path(&exe, exe_path, sizeof(exe_path));
+    // 安全校验：避免空指针引用
+    if (!current || !current->mm || !current->mm->exe_file) {
+        return 0;
+    }
+
+    // 内核标准方法：获取进程可执行文件路径（无需get_fs_path，直接用d_path）
+    ret = d_path(&current->mm->exe_file->f_path, exe_path, sizeof(exe_path));
     if (ret < 0 || ret >= sizeof(exe_path)) {
         return 0; // 路径获取失败，不视为系统应用
     }
     exe_path[ret] = '\0';
 
-    // 判断路径是否以/system/开头（覆盖/system/app、/system/priv-app等子目录）
+    // 判断路径是否以/system/开头（覆盖/system/app、/system/priv-app等所有系统目录）
     if (strncmp(exe_path, SYSTEM_PATH_PREFIX, SYSTEM_PATH_LEN) == 0) {
         pr_debug("[HMA++]Allow system path app: %s\n", exe_path);
         return 1;
