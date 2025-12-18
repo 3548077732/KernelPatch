@@ -2,8 +2,7 @@
 #include <kpmodule.h>
 #include <kputils.h>
 #include <syscall.h>
-// 强制包含框架核心类型头文件，确保所有结构体/宏可用
-#include <kernel/include/ktypes.h>
+// 仅保留框架公共头文件，不手动引入任何内部路径头文件
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <asm/current.h>
@@ -11,7 +10,7 @@
 #include <linux/kernel.h>
 
 // ###########################################################################
-// 仅补充框架未提供的基础定义，绝不重复框架已有内容
+// 仅补充框架未提供的基础定义（用#ifndef包裹，避免重复）
 // ###########################################################################
 #ifndef GFP_KERNEL
 #define GFP_KERNEL 0
@@ -236,7 +235,7 @@ static const __be16 allowed_ports[] = {
 #define ALLOWED_PORT_SIZE (sizeof(allowed_ports)/sizeof(allowed_ports[0]))
 
 // ###########################################################################
-// DNS缓存数据结构（完全使用框架链表/锁类型）
+// DNS缓存数据结构（完全使用框架间接提供的类型）
 // ###########################################################################
 struct dns_cache_entry {
     char domain[NI_MAXHOST];
@@ -246,19 +245,19 @@ struct dns_cache_entry {
     } addr;
     int family;
     unsigned long expire_jiffies;
-    struct list_head list;       // 框架ktypes.h定义的list_head
-    struct hlist_node hash_node; // 框架ktypes.h定义的hlist_node
+    struct list_head list;       // 框架间接提供（通过kpmodule.h/kputils.h）
+    struct hlist_node hash_node; // 框架间接提供
 };
 struct dns_cache {
-    struct hlist_head *hash_table; // 框架ktypes.h定义的hlist_head
-    struct list_head lru_list;     // 框架ktypes.h定义的list_head
+    struct hlist_head *hash_table; // 框架间接提供
+    struct list_head lru_list;     // 框架间接提供
     unsigned int size;
     unsigned int max_size;
     unsigned int ttl;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spinlock_t lock; // 框架ktypes.h定义的spinlock_t
+    spinlock_t lock; // 框架间接提供
 #else
-    struct mutex lock; // 框架ktypes.h定义的mutex
+    struct mutex lock; // 框架间接提供
 #endif
 };
 static struct dns_cache *dns_cache_global = NULL;
@@ -298,7 +297,7 @@ static unsigned int dns_domain_hash(const char *domain) {
 }
 
 // ###########################################################################
-// DNS缓存核心操作（完全使用框架链表/锁宏）
+// DNS缓存核心操作（完全使用框架间接提供的宏）
 // ###########################################################################
 static int dns_cache_init(void) {
     dns_cache_global = kzalloc(sizeof(struct dns_cache), GFP_KERNEL);
@@ -310,17 +309,17 @@ static int dns_cache_init(void) {
         return -EINVAL;
     }
     for (int i = 0; i < DNS_MAX_CACHE_ENTRIES; ++i) {
-        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]); // 框架ktypes.h宏
+        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]); // 框架间接提供的宏
     }
 
-    INIT_LIST_HEAD(&dns_cache_global->lru_list); // 框架ktypes.h宏
+    INIT_LIST_HEAD(&dns_cache_global->lru_list); // 框架间接提供的宏
     dns_cache_global->size = 0;
     dns_cache_global->max_size = DNS_MAX_CACHE_ENTRIES;
     dns_cache_global->ttl = DNS_CACHE_TTL;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_init(&dns_cache_global->lock); // 框架ktypes.h宏
+    spin_lock_init(&dns_cache_global->lock); // 框架间接提供的宏
 #else
-    mutex_init(&dns_cache_global->lock); // 框架ktypes.h宏
+    mutex_init(&dns_cache_global->lock); // 框架间接提供的宏
 #endif
 
     pr_info("[NetOpt++] DNS cache initialized: max entries=%d, TTL=%ds\n",
@@ -331,23 +330,23 @@ static void dns_cache_destroy(void) {
     if (!dns_cache_global) return;
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock(&dns_cache_global->lock); // 框架ktypes.h宏
+    spin_lock(&dns_cache_global->lock); // 框架间接提供的宏
 #else
-    mutex_lock(&dns_cache_global->lock); // 框架ktypes.h宏
+    mutex_lock(&dns_cache_global->lock); // 框架间接提供的宏
 #endif
 
     struct list_head *pos, *n;
-    list_for_each_safe(pos, n, &dns_cache_global->lru_list) { // 框架ktypes.h宏
-        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list); // 框架ktypes.h宏
-        hlist_del(&entry->hash_node); // 框架ktypes.h宏
-        list_del(&entry->list); // 框架ktypes.h宏
+    list_for_each_safe(pos, n, &dns_cache_global->lru_list) { // 框架间接提供的宏
+        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list); // 框架间接提供的宏
+        hlist_del(&entry->hash_node); // 框架间接提供的宏
+        list_del(&entry->list); // 框架间接提供的宏
         kfree(entry);
     }
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_unlock(&dns_cache_global->lock); // 框架ktypes.h宏
+    spin_unlock(&dns_cache_global->lock); // 框架间接提供的宏
 #else
-    mutex_unlock(&dns_cache_global->lock); // 框架ktypes.h宏
+    mutex_unlock(&dns_cache_global->lock); // 框架间接提供的宏
 #endif
 
     kfree(dns_cache_global->hash_table);
@@ -362,20 +361,20 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
 
     unsigned long flags = 0;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_irqsave(&dns_cache_global->lock, flags); // 框架ktypes.h宏
+    spin_lock_irqsave(&dns_cache_global->lock, flags); // 框架间接提供的宏
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
 
     unsigned int hash = dns_domain_hash(domain);
     struct dns_cache_entry *entry = NULL;
-    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 框架ktypes.h宏
+    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 框架间接提供的宏
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
             if (time_before(jiffies, entry->expire_jiffies)) {
                 list_del(&entry->list);
-                list_add(&entry->list, &dns_cache_global->lru_list); // 框架ktypes.h宏
+                list_add(&entry->list, &dns_cache_global->lru_list); // 框架间接提供的宏
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-                spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 框架ktypes.h宏
+                spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 框架间接提供的宏
 #else
                 mutex_unlock(&dns_cache_global->lock);
 #endif
@@ -410,14 +409,14 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
 
     unsigned long flags = 0;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_irqsave(&dns_cache_global->lock, flags); // 框架ktypes.h宏
+    spin_lock_irqsave(&dns_cache_global->lock, flags); // 框架间接提供的宏
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
 
     unsigned int hash = dns_domain_hash(domain);
     struct dns_cache_entry *entry = NULL;
-    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 框架ktypes.h宏
+    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 框架间接提供的宏
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
             if (family == AF_INET) {
                 entry->addr.ipv4 = *(struct in_addr *)addr;
@@ -426,7 +425,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
             }
             entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ);
             list_del(&entry->list);
-            list_add(&entry->list, &dns_cache_global->lru_list); // 框架ktypes.h宏
+            list_add(&entry->list, &dns_cache_global->lru_list); // 框架间接提供的宏
 #ifdef DNS_CACHE_LOCK_SPINLOCK
             spin_unlock_irqrestore(&dns_cache_global->lock, flags);
 #else
@@ -454,20 +453,20 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
         entry->addr.ipv6 = *(struct in6_addr *)addr;
     }
     entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ);
-    INIT_LIST_HEAD(&entry->list); // 框架ktypes.h宏
-    INIT_HLIST_NODE(&entry->hash_node); // 框架ktypes.h宏
+    INIT_LIST_HEAD(&entry->list); // 框架间接提供的宏
+    INIT_HLIST_NODE(&entry->hash_node); // 框架间接提供的宏
 
     if (dns_cache_global->size >= dns_cache_global->max_size) {
         struct dns_cache_entry *lru_entry = list_entry(dns_cache_global->lru_list.prev,
-                                                      struct dns_cache_entry, list); // 框架ktypes.h宏
+                                                      struct dns_cache_entry, list); // 框架间接提供的宏
         hlist_del(&lru_entry->hash_node);
         list_del(&lru_entry->list);
         kfree(lru_entry);
         dns_cache_global->size--;
     }
 
-    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]); // 框架ktypes.h宏
-    list_add(&entry->list, &dns_cache_global->lru_list); // 框架ktypes.h宏
+    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]); // 框架间接提供的宏
+    list_add(&entry->list, &dns_cache_global->lru_list); // 框架间接提供的宏
     dns_cache_global->size++;
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
