@@ -1,7 +1,7 @@
 #include <compiler.h>
 #include <kpmodule.h>
 #include <linux/printk.h>
-#include <asm-generic/unistd.h>  // 移除 uapi/ 前缀，使用框架兼容的unistd头文件
+// 核心修复：移除 asm-generic/unistd.h，框架已内置 syscall 编号定义
 #include <linux/uaccess.h>
 #include <syscall.h>
 #include <linux/string.h>
@@ -9,14 +9,13 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-// 核心修复：改用基础 socket 头文件，移除 uapi 路径依赖
 #include <linux/socket.h>
 #include <linux/net.h>
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/tcp.h>
 #include <linux/sysctl.h>
-#include <linux/limits.h>  // 移除 uapi/ 前缀
+#include <linux/limits.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -24,7 +23,6 @@
 #include <linux/jiffies.h>
 #include <linux/time.h>
 #include <netdb.h>
-// 保留架构无关的 asm 头文件
 #include <asm-generic/socket.h>
 #include <asm-generic/errno.h>
 
