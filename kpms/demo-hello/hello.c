@@ -1,7 +1,7 @@
 #include <compiler.h>
 #include <kpmodule.h>
 #include <linux/printk.h>
-#include <uapi/asm-generic/unistd.h>
+#include <asm-generic/unistd.h>  // 移除 uapi/ 前缀，使用框架兼容的unistd头文件
 #include <linux/uaccess.h>
 #include <syscall.h>
 #include <linux/string.h>
@@ -9,14 +9,14 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-// 修复：替换 <linux/socket.h> 为架构无关的头文件组合
-#include <uapi/linux/socket.h>
+// 核心修复：改用基础 socket 头文件，移除 uapi 路径依赖
+#include <linux/socket.h>
 #include <linux/net.h>
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/tcp.h>
 #include <linux/sysctl.h>
-#include <uapi/linux/limits.h>
+#include <linux/limits.h>  // 移除 uapi/ 前缀
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -24,7 +24,7 @@
 #include <linux/jiffies.h>
 #include <linux/time.h>
 #include <netdb.h>
-// 修复：添加架构适配的asm头文件（KernelPatch框架通用路径）
+// 保留架构无关的 asm 头文件
 #include <asm-generic/socket.h>
 #include <asm-generic/errno.h>
 
