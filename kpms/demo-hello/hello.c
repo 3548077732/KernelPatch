@@ -8,8 +8,7 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-// 核心修复1：删除 linux/inet.h（框架未提供）
-#include <linux/tcp.h>
+// 核心修复1：删除 linux/tcp.h（框架未提供，且无直接依赖）
 #include <linux/sysctl.h>
 #include <linux/limits.h>
 #include <linux/kernel.h>
@@ -21,7 +20,7 @@
 #include <netdb.h>
 
 // ###########################################################################
-// 手动补充所有缺失的核心定义（替代 linux/socket.h + linux/in.h + linux/inet.h）
+// 手动补充所有缺失的核心定义（替代所有框架不支持的头文件）
 // ###########################################################################
 // 1. 基础类型与宏定义
 #ifndef __BIG_ENDIAN
@@ -132,8 +131,7 @@ struct addrinfo {
     struct addrinfo *ai_next;
 };
 
-// 3. 核心函数：手动实现 inet_ntop（替代 linux/inet.h 中的同名函数）
-// 功能：将网络字节序的IP地址转换为字符串形式
+// 3. 核心函数：手动实现 inet_ntop（IP地址转字符串）
 static const char *inet_ntop(int family, const void *addr, char *buf, size_t buf_len) {
     if (!addr || !buf || buf_len == 0) return NULL;
 
@@ -141,7 +139,6 @@ static const char *inet_ntop(int family, const void *addr, char *buf, size_t buf
         case AF_INET: {
             const struct in_addr *ipv4 = (const struct in_addr *)addr;
             __u8 *bytes = (__u8 *)&ipv4->s_addr;
-            // 格式化IPv4地址（xxx.xxx.xxx.xxx）
             int ret = snprintf(buf, buf_len, "%u.%u.%u.%u",
                               bytes[0], bytes[1], bytes[2], bytes[3]);
             return (ret >= 0 && (size_t)ret < buf_len) ? buf : NULL;
@@ -150,14 +147,12 @@ static const char *inet_ntop(int family, const void *addr, char *buf, size_t buf
             const struct in6_addr *ipv6 = (const struct in6_addr *)addr;
             char temp[INET6_ADDRSTRLEN] = {0};
             size_t pos = 0;
-            // 格式化IPv6地址（xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx）
             for (int i = 0; i < 8; ++i) {
                 __u16 segment = ntohs(ipv6->s6_addr16[i]);
                 int ret = snprintf(temp + pos, sizeof(temp) - pos,
                                   "%x%s", segment, (i < 7) ? ":" : "");
                 if (ret < 0 || (pos += ret) >= sizeof(temp)) return NULL;
             }
-            // 拷贝到目标缓冲区
             if (strlen(temp) >= buf_len) return NULL;
             strcpy(buf, temp);
             return buf;
