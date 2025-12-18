@@ -8,7 +8,7 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-#include <linux/net.h>
+// 核心修复：删除 linux/net.h 包含（框架未提供，且功能已覆盖）
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/tcp.h>
