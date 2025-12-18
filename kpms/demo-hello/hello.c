@@ -8,9 +8,6 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-// 核心修复：移除 linux/socket.h，改用 asm-generic 完整替代
-#include <asm-generic/socket.h>
-#include <asm-generic/errno.h>
 #include <linux/net.h>
 #include <linux/in.h>
 #include <linux/inet.h>
@@ -25,31 +22,111 @@
 #include <linux/time.h>
 #include <netdb.h>
 
-// 补充 socket 相关宏定义（替换 linux/socket.h 的核心依赖）
-#ifndef SOCK_STREAM
-#define SOCK_STREAM 1
-#endif
-#ifndef SOCK_DGRAM
-#define SOCK_DGRAM 2
-#endif
+// ###########################################################################
+// 手动补充所有缺失的socket核心定义（替代 linux/socket.h + asm-generic/socket.h）
+// ###########################################################################
+// 地址族定义
 #ifndef AF_INET
-#define AF_INET 2
+#define AF_INET 2       // IPv4
 #endif
 #ifndef AF_INET6
-#define AF_INET6 10
+#define AF_INET6 10     // IPv6
 #endif
+#ifndef AF_UNSPEC
+#define AF_UNSPEC 0     // 未指定地址族
+#endif
+
+// 套接字类型定义
+#ifndef SOCK_STREAM
+#define SOCK_STREAM 1   // TCP
+#endif
+#ifndef SOCK_DGRAM
+#define SOCK_DGRAM 2    // UDP
+#endif
+
+// 协议类型定义
+#ifndef IPPROTO_TCP
+#define IPPROTO_TCP 6
+#endif
+#ifndef IPPROTO_UDP
+#define IPPROTO_UDP 17
+#endif
+
+// 辅助宏定义
 #ifndef SOL_SOCKET
 #define SOL_SOCKET 1
 #endif
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1025 // 域名最大长度
+#endif
+#ifndef INET6_ADDRSTRLEN
+#define INET6_ADDRSTRLEN 46 // IPv6地址字符串最大长度
+#endif
 
+// IPv4地址结构体
+struct in_addr {
+    __be32 s_addr;
+};
+
+// IPv6地址结构体
+struct in6_addr {
+    union {
+        __u8 u6_addr8[16];
+        __be16 u6_addr16[8];
+        __be32 u6_addr32[4];
+    } in6_u;
+#define s6_addr in6_u.u6_addr8
+#define s6_addr16 in6_u.u6_addr16
+#define s6_addr32 in6_u.u6_addr32
+};
+
+// 通用socket地址结构体
+struct sockaddr {
+    __kernel_sa_family_t sa_family; // 地址族
+    char sa_data[14];               // 地址数据
+};
+
+// IPv4 socket地址结构体
+struct sockaddr_in {
+    __kernel_sa_family_t sin_family; // AF_INET
+    __be16 sin_port;                 // 端口号（网络字节序）
+    struct in_addr sin_addr;         // IPv4地址
+    unsigned char sin_zero[8];       // 填充字段
+};
+
+// IPv6 socket地址结构体
+struct sockaddr_in6 {
+    __kernel_sa_family_t sin6_family; // AF_INET6
+    __be16 sin6_port;                 // 端口号（网络字节序）
+    __be32 sin6_flowinfo;             // 流信息
+    struct in6_addr sin6_addr;        // IPv6地址
+    __be32 sin6_scope_id;             // 作用域ID
+};
+
+// getaddrinfo 相关结构体
+struct addrinfo {
+    int ai_flags;                     // 标志位
+    int ai_family;                    // 地址族
+    int ai_socktype;                  // 套接字类型
+    int ai_protocol;                  // 协议类型
+    socklen_t ai_addrlen;             // 地址长度
+    char *ai_canonname;               // 规范域名
+    struct sockaddr *ai_addr;         // 地址指针
+    struct addrinfo *ai_next;         // 下一个节点（链表）
+};
+
+// ###########################################################################
 // 模块元信息
+// ###########################################################################
 KPM_NAME("NetOpt++");
 KPM_VERSION("1.1");
 KPM_LICENSE("GPLv3");
 KPM_AUTHOR("NightFallsLikeRain");
 KPM_DESCRIPTION("Android 内核网络优化模块：TCP参数调优 + 恶意网络请求拦截 + DNS缓存优化");
 
-// -------------------------- 核心配置参数 --------------------------
+// ###########################################################################
+// 核心配置参数
+// ###########################################################################
 // 1. TCP 优化参数（可根据设备性能调整）
 #define TCP_CONGESTION_ALG "bbr"          // 拥塞控制算法（bbr/cubic/htcp）
 #define TCP_FASTOPEN_QSIZE 64             // TCP快速打开队列大小
@@ -66,14 +143,11 @@ KPM_DESCRIPTION("Android 内核网络优化模块：TCP参数调优 + 恶意网�
 
 // 3. 拦截黑名单（广告/追踪/恶意域名，支持通配符前缀匹配）
 static const char *block_domain_list[] = {
-    // 广告域名
     "ad.", "ads.", "advert.", "advertising.", "adserver.",
     "doubleclick.", "googleads.", "googlesyndication.",
     "facebookads.", "twitterads.", "bingads.", "yahooads.",
-    // 追踪域名
     "analytics.", "track.", "tracking.", "stats.", "metric.",
     "datacollect.", "userbehavior.", "crashlytics.", "firebaseanalytics.",
-    // 恶意/垃圾域名
     "malware.", "phish.", "virus.", "spam.", "adware.",
     "trojan.", "spyware.", "botnet.", "miner.", "cryptojack."
 };
@@ -94,37 +168,39 @@ static const __be16 allowed_ports[] = {
 };
 #define ALLOWED_PORT_SIZE (sizeof(allowed_ports)/sizeof(allowed_ports[0]))
 
-// -------------------------- DNS缓存数据结构 --------------------------
-// DNS缓存条目（支持IPv4/IPv6）
+// ###########################################################################
+// DNS缓存数据结构
+// ###########################################################################
 struct dns_cache_entry {
-    char domain[NI_MAXHOST];              // 域名（最大长度符合POSIX标准）
+    char domain[NI_MAXHOST];              // 域名
     union {
         struct in_addr ipv4;              // IPv4地址
         struct in6_addr ipv6;             // IPv6地址
     } addr;
     int family;                           // 地址族（AF_INET/AF_INET6）
     unsigned long expire_jiffies;         // 过期时间（内核节拍数）
-    struct list_head list;                // 链表节点（用于LRU淘汰）
-    struct hlist_node hash_node;          // 哈希表节点（快速查询）
+    struct list_head list;                // LRU链表节点
+    struct hlist_node hash_node;          // 哈希表节点
 };
 
-// DNS缓存全局结构
 struct dns_cache {
-    struct hlist_head *hash_table;        // 哈希表（提升查询效率）
+    struct hlist_head *hash_table;        // 哈希表（快速查询）
     struct list_head lru_list;            // LRU链表（淘汰策略）
     unsigned int size;                    // 当前缓存条目数
     unsigned int max_size;                // 最大缓存条目数
     unsigned int ttl;                     // 缓存过期时间（秒）
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spinlock_t lock;                      // 自旋锁（多核安全，低延迟）
+    spinlock_t lock;                      // 自旋锁（多核安全）
 #else
-    struct mutex lock;                    // 互斥锁（适用于长操作）
+    struct mutex lock;                    // 互斥锁
 #endif
 };
 
 static struct dns_cache *dns_cache_global = NULL;
 
-// -------------------------- 工具函数 --------------------------
+// ###########################################################################
+// 工具函数
+// ###########################################################################
 // 检查端口是否在白名单中
 static int is_port_allowed(__be16 port) {
     for (size_t i = 0; i < ALLOWED_PORT_SIZE; ++i) {
@@ -139,7 +215,7 @@ static int match_domain_prefix(const char *domain, const char *prefix) {
     return strncmp(domain, prefix, prefix_len) == 0;
 }
 
-// 从socket地址中提取域名/IP（简化实现，优先解析IP）
+// 从socket地址中提取IP字符串（简化实现，适配手动定义的结构体）
 static int get_target_addr(struct sockaddr *sa, char *buf, size_t buf_len) {
     if (!sa || !buf) return -EINVAL;
 
@@ -159,7 +235,7 @@ static int get_target_addr(struct sockaddr *sa, char *buf, size_t buf_len) {
     }
 }
 
-// 哈希函数（域名哈希，用于缓存查询）
+// 域名哈希函数（用于缓存查询）
 static unsigned int dns_domain_hash(const char *domain) {
     unsigned int hash = 5381;
     int c;
@@ -169,8 +245,9 @@ static unsigned int dns_domain_hash(const char *domain) {
     return hash % DNS_MAX_CACHE_ENTRIES;
 }
 
-// -------------------------- DNS缓存核心操作 --------------------------
-// 初始化DNS缓存
+// ###########################################################################
+// DNS缓存核心操作
+// ###########################################################################
 static int dns_cache_init(void) {
     dns_cache_global = kzalloc(sizeof(struct dns_cache), GFP_KERNEL);
     if (!dns_cache_global) return -ENOMEM;
@@ -201,7 +278,6 @@ static int dns_cache_init(void) {
     return 0;
 }
 
-// 销毁DNS缓存（释放所有资源）
 static void dns_cache_destroy(void) {
     if (!dns_cache_global) return;
 
@@ -211,7 +287,7 @@ static void dns_cache_destroy(void) {
     mutex_lock(&dns_cache_global->lock);
 #endif
 
-    // 遍历LRU链表，释放所有缓存条目
+    // 释放所有缓存条目
     struct list_head *pos, *n;
     list_for_each_safe(pos, n, &dns_cache_global->lru_list) {
         struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list);
@@ -232,7 +308,6 @@ static void dns_cache_destroy(void) {
     pr_info("[NetOpt++] DNS cache destroyed\n");
 }
 
-// 查找DNS缓存（命中返回条目，未命中返回NULL）
 static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) {
     if (!dns_cache_global || !domain || (family != AF_INET && family != AF_INET6)) {
         return NULL;
@@ -245,16 +320,15 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
     mutex_lock(&dns_cache_global->lock);
 #endif
 
-    // 计算哈希值，查找哈希表
     unsigned int hash = dns_domain_hash(domain);
     struct hlist_node *hpos;
     struct dns_cache_entry *entry = NULL;
     hlist_for_each_entry(hpos, &dns_cache_global->hash_table[hash], hash_node) {
         entry = hlist_entry(hpos, struct dns_cache_entry, hash_node);
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
-            // 检查是否过期
+            // 检查过期
             if (time_before(jiffies, entry->expire_jiffies)) {
-                // 命中，更新LRU（移到链表头部）
+                // 更新LRU位置
                 list_del(&entry->list);
                 list_add(&entry->list, &dns_cache_global->lru_list);
 #ifdef DNS_CACHE_LOCK_SPINLOCK
@@ -264,7 +338,7 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
 #endif
                 return entry;
             } else {
-                // 已过期，删除该条目
+                // 过期删除
                 hlist_del(&entry->hash_node);
                 list_del(&entry->list);
                 kfree(entry);
@@ -284,13 +358,11 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
     return NULL;
 }
 
-// 添加DNS缓存条目（超出最大容量时淘汰LRU尾部条目）
 static int dns_cache_add(const char *domain, const void *addr, int family) {
     if (!dns_cache_global || !domain || !addr || (family != AF_INET && family != AF_INET6)) {
         return -EINVAL;
     }
 
-    // 检查域名长度
     if (strlen(domain) >= NI_MAXHOST) {
         pr_warn("[NetOpt++] DNS domain too long: %s\n", domain);
         return -EINVAL;
@@ -303,21 +375,19 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
     mutex_lock(&dns_cache_global->lock);
 #endif
 
-    // 先检查是否已存在（避免重复添加）
     unsigned int hash = dns_domain_hash(domain);
     struct hlist_node *hpos;
     struct dns_cache_entry *entry = NULL;
     hlist_for_each_entry(hpos, &dns_cache_global->hash_table[hash], hash_node) {
         entry = hlist_entry(hpos, struct dns_cache_entry, hash_node);
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
-            // 更新已有条目（刷新过期时间+地址）
+            // 更新已有条目
             if (family == AF_INET) {
                 entry->addr.ipv4 = *(struct in_addr *)addr;
             } else {
                 entry->addr.ipv6 = *(struct in6_addr *)addr;
             }
             entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ);
-            // 更新LRU位置
             list_del(&entry->list);
             list_add(&entry->list, &dns_cache_global->lru_list);
 #ifdef DNS_CACHE_LOCK_SPINLOCK
@@ -340,7 +410,6 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
         return -ENOMEM;
     }
 
-    // 填充条目信息
     strncpy(entry->domain, domain, NI_MAXHOST - 1);
     entry->family = family;
     if (family == AF_INET) {
@@ -352,7 +421,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
     INIT_LIST_HEAD(&entry->list);
     INIT_HLIST_NODE(&entry->hash_node);
 
-    // 超出最大容量，淘汰LRU尾部条目（最久未使用）
+    // LRU淘汰
     if (dns_cache_global->size >= dns_cache_global->max_size) {
         struct dns_cache_entry *lru_entry = list_entry(dns_cache_global->lru_list.prev,
                                                       struct dns_cache_entry, list);
@@ -362,7 +431,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
         dns_cache_global->size--;
     }
 
-    // 添加到哈希表和LRU链表头部
+    // 添加到哈希表和LRU链表
     hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]);
     list_add(&entry->list, &dns_cache_global->lru_list);
     dns_cache_global->size++;
@@ -376,86 +445,78 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
     return 0;
 }
 
-// -------------------------- TCP参数优化 --------------------------
+// ###########################################################################
+// TCP参数优化
+// ###########################################################################
 static int tcp_optimize_init(void) {
     int ret = 0;
 
-    // 1. 设置TCP拥塞控制算法（兼容KernelPatch框架的sysctl接口）
+    // 设置TCP拥塞控制算法
 #ifdef CONFIG_TCP_CONG_BBR
     ret = sysctl_set_str("net.ipv4.tcp_congestion_control", TCP_CONGESTION_ALG);
 #else
-    pr_warn("[NetOpt++] BBR congestion control not supported, using cubic\n");
+    pr_warn("[NetOpt++] BBR not supported, use cubic\n");
     ret = sysctl_set_str("net.ipv4.tcp_congestion_control", "cubic");
 #endif
     if (ret) {
-        pr_err("[NetOpt++] Failed to set congestion control: %d\n", ret);
+        pr_err("[NetOpt++] Set congestion control failed: %d\n", ret);
         return ret;
     }
 
-    // 2. 启用TCP快速打开（TFO）
+    // 启用TCP快速打开
     ret = sysctl_set_int("net.ipv4.tcp_fastopen", TCP_FASTOPEN_QSIZE);
     if (ret) {
-        pr_err("[NetOpt++] Failed to enable TCP fastopen: %d\n", ret);
+        pr_err("[NetOpt++] Enable TCP fastopen failed: %d\n", ret);
         return ret;
     }
 
-    // 3. 调整TCP连接队列参数
-    ret = sysctl_set_int("net.ipv4.tcp_max_syn_backlog", TCP_MAX_SYN_BACKLOG);
-    if (ret) pr_warn("[NetOpt++] Failed to set tcp_max_syn_backlog: %d\n", ret);
+    // 调整TCP连接队列和保活参数
+    sysctl_set_int("net.ipv4.tcp_max_syn_backlog", TCP_MAX_SYN_BACKLOG);
+    sysctl_set_int("net.ipv4.tcp_window_scaling", 1);
+    sysctl_set_int("net.ipv4.tcp_keepalive_time", TCP_KEEPALIVE_TIME);
+    sysctl_set_int("net.ipv4.tcp_keepalive_intvl", TCP_KEEPALIVE_INTVL);
+    sysctl_set_int("net.ipv4.tcp_keepalive_probes", TCP_KEEPALIVE_PROBES);
 
-    // 4. 启用窗口缩放
-    ret = sysctl_set_int("net.ipv4.tcp_window_scaling", 1);
-    if (ret) pr_warn("[NetOpt++] Failed to enable tcp_window_scaling: %d\n", ret);
-
-    // 5. 调整TCP保活参数
-    ret = sysctl_set_int("net.ipv4.tcp_keepalive_time", TCP_KEEPALIVE_TIME);
-    if (ret) pr_warn("[NetOpt++] Failed to set tcp_keepalive_time: %d\n", ret);
-    ret = sysctl_set_int("net.ipv4.tcp_keepalive_intvl", TCP_KEEPALIVE_INTVL);
-    if (ret) pr_warn("[NetOpt++] Failed to set tcp_keepalive_intvl: %d\n", ret);
-    ret = sysctl_set_int("net.ipv4.tcp_keepalive_probes", TCP_KEEPALIVE_PROBES);
-    if (ret) pr_warn("[NetOpt++] Failed to set tcp_keepalive_probes: %d\n", ret);
-
-    pr_info("[NetOpt++] TCP optimization applied successfully (alg: %s, fastopen: %d)\n",
+    pr_info("[NetOpt++] TCP optimized: alg=%s, fastopen=%d\n",
             TCP_CONGESTION_ALG, TCP_FASTOPEN_QSIZE);
     return 0;
 }
 
 static void tcp_optimize_restore(void) {
-    // 恢复默认拥塞控制算法（cubic为多数内核默认）
     sysctl_set_str("net.ipv4.tcp_congestion_control", "cubic");
-    // 恢复TCP快速打开默认值
     sysctl_set_int("net.ipv4.tcp_fastopen", 0);
-    pr_info("[NetOpt++] TCP parameters restored to default\n");
+    pr_info("[NetOpt++] TCP parameters restored\n");
 }
 
-// -------------------------- 网络请求拦截钩子 --------------------------
-// connect 钩子：拦截TCP连接（黑名单域名+非法端口）
+// ###########################################################################
+// 网络请求拦截钩子
+// ###########################################################################
 static void before_connect(hook_fargs3_t *args, void *udata) {
     int fd = (int)syscall_argn(args, 0);
     struct sockaddr __user *addr_user = (struct sockaddr __user *)syscall_argn(args, 1);
     socklen_t addr_len = (socklen_t)syscall_argn(args, 2);
 
-    // 拷贝用户空间socket地址到内核空间
     struct sockaddr_in addr_kernel;
-    if (addr_len > sizeof(addr_kernel)) return;
-    if (copy_from_user(&addr_kernel, addr_user, addr_len)) return;
+    if (addr_len > sizeof(addr_kernel) || copy_from_user(&addr_kernel, addr_user, addr_len)) {
+        return;
+    }
 
-    // 检查端口是否合法
+    // 非法端口拦截
     if (!is_port_allowed(addr_kernel.sin_port)) {
         char port_str[8];
         snprintf(port_str, sizeof(port_str), "%d", ntohs(addr_kernel.sin_port));
-        pr_warn("[NetOpt++] Blocked connect to illegal port %s (fd: %d)\n", port_str, fd);
+        pr_warn("[NetOpt++] Block connect: illegal port %s (fd:%d)\n", port_str, fd);
         args->skip_origin = 1;
         args->ret = -EACCES;
         return;
     }
 
-    // 检查域名/IP是否在黑名单
+    // 黑名单拦截
     char target_addr[INET6_ADDRSTRLEN];
     if (get_target_addr((struct sockaddr *)&addr_kernel, target_addr, sizeof(target_addr)) == 0) {
         for (size_t i = 0; i < BLOCK_DOMAIN_SIZE; ++i) {
             if (match_domain_prefix(target_addr, block_domain_list[i])) {
-                pr_warn("[NetOpt++] Blocked connect to blacklisted domain/IP: %s (fd: %d)\n", target_addr, fd);
+                pr_warn("[NetOpt++] Block connect: blacklisted %s (fd:%d)\n", target_addr, fd);
                 args->skip_origin = 1;
                 args->ret = -EACCES;
                 return;
@@ -464,7 +525,6 @@ static void before_connect(hook_fargs3_t *args, void *udata) {
     }
 }
 
-// sendto 钩子：拦截UDP非法发送（非法端口+黑名单）
 static void before_sendto(hook_fargs6_t *args, void *udata) {
     int fd = (int)syscall_argn(args, 0);
     struct sockaddr __user *addr_user = (struct sockaddr __user *)syscall_argn(args, 4);
@@ -473,25 +533,26 @@ static void before_sendto(hook_fargs6_t *args, void *udata) {
     if (!addr_user || addr_len == 0) return;
 
     struct sockaddr_in addr_kernel;
-    if (addr_len > sizeof(addr_kernel)) return;
-    if (copy_from_user(&addr_kernel, addr_user, addr_len)) return;
+    if (addr_len > sizeof(addr_kernel) || copy_from_user(&addr_kernel, addr_user, addr_len)) {
+        return;
+    }
 
     // 非法端口拦截
     if (!is_port_allowed(addr_kernel.sin_port)) {
         char port_str[8];
         snprintf(port_str, sizeof(port_str), "%d", ntohs(addr_kernel.sin_port));
-        pr_warn("[NetOpt++] Blocked sendto to illegal port %s (fd: %d)\n", port_str, fd);
+        pr_warn("[NetOpt++] Block sendto: illegal port %s (fd:%d)\n", port_str, fd);
         args->skip_origin = 1;
         args->ret = -EACCES;
         return;
     }
 
-    // 黑名单域名拦截
+    // 黑名单拦截
     char target_addr[INET6_ADDRSTRLEN];
     if (get_target_addr((struct sockaddr *)&addr_kernel, target_addr, sizeof(target_addr)) == 0) {
         for (size_t i = 0; i < BLOCK_DOMAIN_SIZE; ++i) {
             if (match_domain_prefix(target_addr, block_domain_list[i])) {
-                pr_warn("[NetOpt++] Blocked sendto to blacklisted domain/IP: %s (fd: %d)\n", target_addr, fd);
+                pr_warn("[NetOpt++] Block sendto: blacklisted %s (fd:%d)\n", target_addr, fd);
                 args->skip_origin = 1;
                 args->ret = -EACCES;
                 return;
@@ -500,9 +561,7 @@ static void before_sendto(hook_fargs6_t *args, void *udata) {
     }
 }
 
-// getaddrinfo 钩子：DNS缓存优化（优先从缓存查询，未命中则执行原调用并缓存结果）
 static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
-    // 原系统调用执行失败，直接返回
     if (args->ret != 0) return;
 
     const char __user *node = (const char __user *)syscall_argn(args, 0);
@@ -510,57 +569,53 @@ static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
     const struct addrinfo __user *hints = (const struct addrinfo __user *)syscall_argn(args, 2);
     struct addrinfo __user **res = (struct addrinfo __user **)syscall_argn(args, 3);
 
-    // 只处理域名解析（node不为空，service为空，且hints指定地址族）
     if (!node || service || !hints || !res) return;
 
-    // 拷贝hints参数到内核空间
+    // 拷贝hints参数
     struct addrinfo hints_kernel;
     if (copy_from_user(&hints_kernel, hints, sizeof(struct addrinfo))) return;
 
-    // 只处理IPv4/IPv6的TCP/UDP解析请求
+    // 只处理IPv4/IPv6的TCP/UDP请求
     if ((hints_kernel.ai_family != AF_INET && hints_kernel.ai_family != AF_INET6) ||
         (hints_kernel.ai_socktype != SOCK_STREAM && hints_kernel.ai_socktype != SOCK_DGRAM)) {
         return;
     }
 
-    // 拷贝域名到内核空间
+    // 拷贝域名
     char domain[NI_MAXHOST];
     if (strncpy_from_user(domain, node, NI_MAXHOST - 1) < 0) return;
     domain[NI_MAXHOST - 1] = '\0';
 
-    // 检查是否命中缓存
+    // 缓存命中检查
     struct dns_cache_entry *cache_entry = dns_cache_lookup(domain, hints_kernel.ai_family);
     if (cache_entry) {
-        // 缓存命中，直接构造addrinfo返回给用户空间，跳过原结果
         struct addrinfo ai_kernel;
         struct sockaddr_in sin_kernel;
         size_t ai_total_size = sizeof(struct addrinfo) + sizeof(struct sockaddr_in);
 
-        // 分配用户空间内存（使用KernelPatch框架兼容的内存分配接口）
+        // 分配用户空间内存
         struct addrinfo __user *ai_user = (struct addrinfo __user *)kp_alloc_user(ai_total_size);
         if (!ai_user) return;
 
-        // 构造addrinfo结构
+        // 构造addrinfo
         memset(&ai_kernel, 0, sizeof(ai_kernel));
         ai_kernel.ai_flags = hints_kernel.ai_flags;
         ai_kernel.ai_family = hints_kernel.ai_family;
         ai_kernel.ai_socktype = hints_kernel.ai_socktype;
         ai_kernel.ai_protocol = hints_kernel.ai_protocol;
         ai_kernel.ai_addrlen = sizeof(struct sockaddr_in);
-        ai_kernel.ai_addr = (struct sockaddr *)(ai_user + 1); // 地址紧随addrinfo之后
+        ai_kernel.ai_addr = (struct sockaddr *)(ai_user + 1);
         ai_kernel.ai_next = NULL;
 
-        // 构造sockaddr_in结构
+        // 构造sockaddr_in
         memset(&sin_kernel, 0, sizeof(sin_kernel));
         sin_kernel.sin_family = hints_kernel.ai_family;
         if (hints_kernel.ai_family == AF_INET) {
             sin_kernel.sin_addr = cache_entry->addr.ipv4;
         } else {
-            // IPv6需单独处理sockaddr_in6，此处简化适配（避免编译错误）
             kp_free_user(ai_user);
             return;
         }
-        // 端口由service指定，若未指定则设为0
         sin_kernel.sin_port = 0;
         if (service) {
             unsigned short port;
@@ -569,14 +624,14 @@ static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
             }
         }
 
-        // 拷贝到用户空间（避免内存访问越界）
+        // 拷贝到用户空间
         if (copy_to_user(ai_user, &ai_kernel, sizeof(struct addrinfo)) ||
             copy_to_user(ai_kernel.ai_addr, &sin_kernel, sizeof(struct sockaddr_in))) {
             kp_free_user(ai_user);
             return;
         }
 
-        // 更新用户空间的res指针
+        // 更新res指针
         if (put_user((unsigned long)ai_user, (unsigned long __user *)res)) {
             kp_free_user(ai_user);
             return;
@@ -586,61 +641,57 @@ static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
         return;
     }
 
-    // 缓存未命中，提取原调用结果并添加到缓存
+    // 缓存未命中，添加到缓存
     struct addrinfo ai_kernel;
     if (copy_from_user(&ai_kernel, *res, sizeof(struct addrinfo))) return;
 
     if (ai_kernel.ai_family == AF_INET && ai_kernel.ai_addr) {
         struct sockaddr_in sin_kernel;
         if (copy_from_user(&sin_kernel, ai_kernel.ai_addr, sizeof(struct sockaddr_in))) return;
-        // 添加到DNS缓存
         dns_cache_add(domain, &sin_kernel.sin_addr, AF_INET);
-        pr_debug("[NetOpt++] DNS cache added: %s -> %pI4\n", domain, &sin_kernel.sin_addr);
+        pr_debug("[NetOpt++] DNS cache add: %s -> %pI4\n", domain, &sin_kernel.sin_addr);
     } else if (ai_kernel.ai_family == AF_INET6 && ai_kernel.ai_addr) {
         struct sockaddr_in6 sin6_kernel;
         if (copy_from_user(&sin6_kernel, ai_kernel.ai_addr, sizeof(struct sockaddr_in6))) return;
-        // 添加到DNS缓存
         dns_cache_add(domain, &sin6_kernel.sin6_addr, AF_INET6);
-        pr_debug("[NetOpt++] DNS cache added: %s -> %pI6\n", domain, &sin6_kernel.sin6_addr);
+        pr_debug("[NetOpt++] DNS cache add: %s -> %pI6\n", domain, &sin6_kernel.sin6_addr);
     }
 }
 
-// -------------------------- 模块生命周期 --------------------------
+// ###########################################################################
+// 模块生命周期
+// ###########################################################################
 static long netopt_init(const char *args, const char *event, void *__user reserved) {
     hook_err_t err;
-    pr_info("[NetOpt++] Initializing network optimization module...\n");
+    pr_info("[NetOpt++] Initializing...\n");
 
-    // 1. 初始化DNS缓存
+    // 初始化DNS缓存
     if (dns_cache_init() != 0) {
-        pr_err("[NetOpt++] DNS cache init failed, module init aborted\n");
+        pr_err("[NetOpt++] DNS cache init failed\n");
         return -EINVAL;
     }
 
-    // 2. 应用TCP参数优化
+    // TCP参数优化
     if (tcp_optimize_init() != 0) {
-        pr_err("[NetOpt++] TCP optimization failed, module init aborted\n");
+        pr_err("[NetOpt++] TCP optimize failed\n");
         dns_cache_destroy();
         return -EINVAL;
     }
 
-    // 3. 挂钩核心网络syscall
-    // 挂钩connect（TCP连接）
+    // 挂钩syscall
     err = hook_syscalln(__NR_connect, 3, before_connect, NULL, NULL);
     if (err) { pr_err("[NetOpt++] Hook connect failed: %d\n", err); goto init_fail; }
-    // 挂钩sendto（UDP发送）
     err = hook_syscalln(__NR_sendto, 6, before_sendto, NULL, NULL);
     if (err) { pr_err("[NetOpt++] Hook sendto failed: %d\n", err); goto init_fail; }
-    // 挂钩getaddrinfo（DNS解析，使用after钩子缓存结果）
 #ifdef __NR_getaddrinfo
     err = hook_syscalln(__NR_getaddrinfo, 6, NULL, after_getaddrinfo, NULL);
     if (err) { pr_err("[NetOpt++] Hook getaddrinfo failed: %d\n", err); goto init_fail; }
 #endif
 
-    pr_info("[NetOpt++] Module initialized successfully: TCP optimized + network hooks + DNS cache loaded\n");
+    pr_info("[NetOpt++] Initialized successfully\n");
     return 0;
 
 init_fail:
-    // 初始化失败，清理资源
     dns_cache_destroy();
     tcp_optimize_restore();
     unhook_syscalln(__NR_connect, before_connect, NULL);
@@ -652,25 +703,21 @@ init_fail:
 }
 
 static long netopt_exit(void *__user reserved) {
-    pr_info("[NetOpt++] Exiting network optimization module...\n");
+    pr_info("[NetOpt++] Exiting...\n");
 
-    // 1. 恢复TCP默认参数
     tcp_optimize_restore();
-
-    // 2. 销毁DNS缓存
     dns_cache_destroy();
 
-    // 3. 解钩syscall
     unhook_syscalln(__NR_connect, before_connect, NULL);
     unhook_syscalln(__NR_sendto, before_sendto, NULL);
 #ifdef __NR_getaddrinfo
     unhook_syscalln(__NR_getaddrinfo, NULL, after_getaddrinfo);
 #endif
 
-    pr_info("[NetOpt++] Module exited successfully: TCP parameters + DNS cache + hooks cleaned up\n");
+    pr_info("[NetOpt++] Exited successfully\n");
     return 0;
 }
 
-// 注册模块初始化/退出函数
+// 注册模块
 KPM_INIT(netopt_init);
 KPM_EXIT(netopt_exit);
