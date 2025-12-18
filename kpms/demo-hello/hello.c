@@ -2,7 +2,7 @@
 #include <kpmodule.h>
 #include <kputils.h>
 #include <syscall.h>
-// 保留框架必需头文件，删除冲突/无用头文件
+// 仅保留框架必需头文件，其余完全手动实现
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <asm/current.h>
@@ -10,126 +10,11 @@
 #include <linux/kernel.h>
 
 // ###########################################################################
-// 适配框架：补充未声明符号 + 解决冲突
+// 完全手动实现所有核心依赖（不依赖框架任何链表/锁接口）
 // ###########################################################################
-// 1. 解决重定义：删除手动定义的list/hlist结构体（框架ktypes.h已提供）
-// 2. 补充未声明的内核/框架符号
+// 1. 基础类型与内存分配标志
 #ifndef GFP_KERNEL
-#define GFP_KERNEL 0 // 简化：框架兼容的内存分配标志
-#endif
-
-// 内存分配函数：kzalloc = kmalloc + memset（若框架未提供kzalloc）
-#ifndef kzalloc
-#define kzalloc(size, flags) ({ \
-    void *ptr = kmalloc(size, flags); \
-    if (ptr) memset(ptr, 0, size); \
-    ptr; \
-})
-#endif
-// 声明框架可能未暴露的函数
-extern void *kmalloc(size_t size, int flags);
-extern void kfree(void *ptr);
-extern int copy_from_user(void *to, const void __user *from, size_t n);
-extern int copy_to_user(void __user *to, const void *from, size_t n);
-extern long strncpy_from_user(char *to, const char __user *from, size_t count);
-extern int put_user(unsigned long val, unsigned long __user *addr);
-extern int kstrtou16_from_user(const char __user *s, size_t count, unsigned int base, unsigned short *res);
-extern void *kp_alloc_user(size_t size);
-extern void kp_free_user(void __user *ptr);
-extern int sysctl_set_str(const char *path, const char *val);
-extern int sysctl_set_int(const char *path, int val);
-
-// 中断控制宏（框架未提供时简化为空宏，不影响功能）
-#ifndef local_irq_save
-#define local_irq_save(flags) do { (flags) = 0; } while (0)
-#endif
-#ifndef local_irq_restore
-#define local_irq_restore(flags) do {} while (0)
-#endif
-
-// 调试打印宏（框架未提供pr_debug时映射到pr_info）
-#ifndef pr_debug
-#define pr_debug(fmt, ...) pr_info(fmt, ##__VA_ARGS__)
-#endif
-
-// 3. 自旋锁适配：使用框架兼容的原子操作（替换__builtin_*函数）
-#define spin_lock_init(lock) do { __atomic_store_n(&(lock)->lock, 0, __ATOMIC_RELEASE); } while (0)
-#define spin_lock(lock) do { \
-    while (__atomic_exchange_n(&(lock)->lock, 1, __ATOMIC_ACQUIRE)); \
-} while (0)
-#define spin_unlock(lock) do { \
-    __atomic_store_n(&(lock)->lock, 0, __ATOMIC_RELEASE); \
-} while (0)
-#define spin_lock_irqsave(lock, flags) do { \
-    local_irq_save(flags); \
-    spin_lock(lock); \
-} while (0)
-#define spin_unlock_irqrestore(lock, flags) do { \
-    spin_unlock(lock); \
-    local_irq_restore(flags); \
-} while (0)
-
-// 互斥锁（备用，保持与之前逻辑一致）
-typedef struct {
-    spinlock_t lock;
-    int count;
-} mutex_t;
-#define mutex_init(mutex) do { \
-    spin_lock_init(&(mutex)->lock); \
-    (mutex)->count = 0; \
-} while (0)
-#define mutex_lock(mutex) spin_lock(&(mutex)->lock)
-#define mutex_unlock(mutex) spin_unlock(&(mutex)->lock)
-
-// 4. 补充缺失的hlist操作宏（框架未提供时手动定义）
-#ifndef INIT_HLIST_NODE
-#define INIT_HLIST_NODE(n) do { \
-    (n)->next = NULL; \
-    (n)->pprev = NULL; \
-} while (0)
-#endif
-
-// ###########################################################################
-// 基础类型与宏定义（保留之前的，排除冲突项）
-// ###########################################################################
-#ifndef __BIG_ENDIAN
-#define htons(x) ((__be16)((((x) & 0xff) << 8) | (((x) & 0xff00) >> 8)))
-#define ntohs(x) htons(x)
-#define htonl(x) ((__be32)((((x) & 0xff) << 24) | (((x) & 0xff00) << 8) | (((x) & 0xff0000) >> 8) | (((x) & 0xff000000) >> 24)))
-#define ntohl(x) htonl(x)
-#else
-#define htons(x) ((__be16)(x))
-#define ntohs(x) ((__u16)(x))
-#define htonl(x) ((__be32)(x))
-#define ntohl(x) ((__u32)(x))
-#endif
-
-#ifndef AF_INET
-#define AF_INET 2
-#endif
-#ifndef AF_INET6
-#define AF_INET6 10
-#endif
-#ifndef SOCK_STREAM
-#define SOCK_STREAM 1
-#endif
-#ifndef SOCK_DGRAM
-#define SOCK_DGRAM 2
-#endif
-#ifndef IPPROTO_TCP
-#define IPPROTO_TCP 6
-#endif
-#ifndef IPPROTO_UDP
-#define IPPROTO_UDP 17
-#endif
-#ifndef SOL_SOCKET
-#define SOL_SOCKET 1
-#endif
-#ifndef NI_MAXHOST
-#define NI_MAXHOST 1025
-#endif
-#ifndef INET6_ADDRSTRLEN
-#define INET6_ADDRSTRLEN 46
+#define GFP_KERNEL 0
 #endif
 #ifndef __be16
 #define __be16 unsigned short
@@ -155,15 +40,205 @@ typedef struct {
 #ifndef socklen_t
 #define socklen_t unsigned int
 #endif
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1025
+#endif
+#ifndef INET6_ADDRSTRLEN
+#define INET6_ADDRSTRLEN 46
+#endif
 
-// 替代 linux/jiffies.h：jiffies 与 HZ 定义
+// 2. 字节序宏
+#ifndef __BIG_ENDIAN
+#define htons(x) ((__be16)((((x) & 0xff) << 8) | (((x) & 0xff00) >> 8)))
+#define ntohs(x) htons(x)
+#define htonl(x) ((__be32)((((x) & 0xff) << 24) | (((x) & 0xff00) << 8) | (((x) & 0xff0000) >> 8) | (((x) & 0xff000000) >> 24)))
+#define ntohl(x) htonl(x)
+#else
+#define htons(x) ((__be16)(x))
+#define ntohs(x) ((__u16)(x))
+#define htonl(x) ((__be32)(x))
+#define ntohl(x) ((__u32)(x))
+#endif
+
+// 3. 网络相关宏
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
+#ifndef SOCK_STREAM
+#define SOCK_STREAM 1
+#endif
+#ifndef SOCK_DGRAM
+#define SOCK_DGRAM 2
+#endif
+#ifndef IPPROTO_TCP
+#define IPPROTO_TCP 6
+#endif
+#ifndef IPPROTO_UDP
+#define IPPROTO_UDP 17
+#endif
+#ifndef SOL_SOCKET
+#define SOL_SOCKET 1
+#endif
+#ifndef EAFNOSUPPORT
+#define EAFNOSUPPORT 97
+#endif
+
+// 4. 链表结构体与操作宏（完全手动实现，不依赖框架）
+struct list_head {
+    struct list_head *next, *prev;
+};
+#define INIT_LIST_HEAD(ptr) do { \
+    (ptr)->next = (ptr); (ptr)->prev = (ptr); \
+} while (0)
+#define list_add(new, head) do { \
+    (new)->prev = (head); \
+    (new)->next = (head)->next; \
+    (head)->next->prev = (new); \
+    (head)->next = (new); \
+} while (0)
+#define list_del(entry) do { \
+    (entry)->prev->next = (entry)->next; \
+    (entry)->next->prev = (entry)->prev; \
+} while (0)
+#define list_for_each_safe(pos, n, head) \
+    for ((pos) = (head)->next, (n) = (pos)->next; (pos) != (head); \
+         (pos) = (n), (n) = (pos)->next)
+#define list_entry(ptr, type, member) container_of(ptr, type, member)
+
+// 5. 哈希链表结构体与操作宏（完全手动实现）
+struct hlist_node {
+    struct hlist_node *next, **pprev;
+};
+struct hlist_head {
+    struct hlist_node *first;
+};
+#define INIT_HLIST_HEAD(head) do { (head)->first = NULL; } while (0)
+#define INIT_HLIST_NODE(n) do { \
+    (n)->next = NULL; \
+    (n)->pprev = NULL; \
+} while (0)
+#define hlist_add_head(n, head) do { \
+    if (((n)->next = (head)->first) != NULL) \
+        (head)->first->pprev = &(n)->next; \
+    (head)->first = (n); \
+    (n)->pprev = &(head)->first; \
+} while (0)
+#define hlist_del(n) do { \
+    if ((n)->next != NULL) \
+        (n)->next->pprev = (n)->pprev; \
+    *(n)->pprev = (n)->next; \
+} while (0)
+#define hlist_for_each_entry(pos, head, member) \
+    for (pos = container_of((head)->first, typeof(*pos), member); \
+         pos != NULL; \
+         pos = container_of((pos)->member.next, typeof(*pos), member))
+
+// 6. 自旋锁结构体与操作宏（原子操作实现，兼容内核态）
+typedef struct {
+    unsigned int lock; // 锁成员，确保宏中(lock)->lock有效
+} spinlock_t;
+#define spin_lock_init(lock) do { __atomic_store_n(&(lock)->lock, 0, __ATOMIC_RELEASE); } while (0)
+#define spin_lock(lock) do { \
+    while (__atomic_exchange_n(&(lock)->lock, 1, __ATOMIC_ACQUIRE)); \
+} while (0)
+#define spin_unlock(lock) do { \
+    __atomic_store_n(&(lock)->lock, 0, __ATOMIC_RELEASE); \
+} while (0)
+#define spin_lock_irqsave(lock, flags) do { \
+    (flags) = 0; /* 简化中断控制，框架未提供时占位 */ \
+    spin_lock(lock); \
+} while (0)
+#define spin_unlock_irqrestore(lock, flags) do { \
+    spin_unlock(lock); \
+    (void)flags; /* 避免未使用变量警告 */ \
+} while (0)
+
+// 7. 互斥锁（备用）
+typedef struct {
+    spinlock_t lock;
+    int count;
+} mutex_t;
+#define mutex_init(mutex) do { \
+    spin_lock_init(&(mutex)->lock); \
+    (mutex)->count = 0; \
+} while (0)
+#define mutex_lock(mutex) spin_lock(&(mutex)->lock)
+#define mutex_unlock(mutex) spin_unlock(&(mutex)->lock)
+
+// 8. 时间相关定义
 extern unsigned long jiffies;
-#define HZ 100 // 兼容多数Android设备内核
-
-// 替代 linux/time.h：时间比较宏
+#define HZ 100
 #define time_before(a, b) ((long)(a) - (long)(b) < 0)
 
-// addrinfo 结构体（替代 netdb.h）
+// 9. 容器宏（链表必备）
+#ifndef offsetof
+#define offsetof(type, member) ((size_t)&((type *)0)->member)
+#endif
+#ifndef container_of
+#define container_of(ptr, type, member) ({ \
+    const typeof(((type *)0)->member) *__mptr = (ptr); \
+    (type *)((char *)__mptr - offsetof(type, member)); })
+#endif
+
+// 10. 内存分配/字符串函数声明（框架未暴露时）
+extern void *kmalloc(size_t size, int flags);
+extern void kfree(void *ptr);
+static inline void *kzalloc(size_t size, int flags) {
+    void *ptr = kmalloc(size, flags);
+    if (ptr) memset(ptr, 0, size);
+    return ptr;
+}
+extern int copy_from_user(void *to, const void __user *from, size_t n);
+extern int copy_to_user(void __user *to, const void *from, size_t n);
+extern long strncpy_from_user(char *to, const char __user *from, size_t count);
+extern int put_user(unsigned long val, unsigned long __user *addr);
+extern int kstrtou16_from_user(const char __user *s, size_t count, unsigned int base, unsigned short *res);
+extern void *kp_alloc_user(size_t size);
+extern void kp_free_user(void __user *ptr);
+extern int sysctl_set_str(const char *path, const char *val);
+extern int sysctl_set_int(const char *path, int val);
+
+// 11. 调试打印宏
+#ifndef pr_debug
+#define pr_debug(fmt, ...) pr_info(fmt, ##__VA_ARGS__)
+#endif
+
+// ###########################################################################
+// 网络相关结构体（手动实现）
+// ###########################################################################
+struct in_addr {
+    __be32 s_addr;
+};
+struct in6_addr {
+    union {
+        __u8 u6_addr8[16];
+        __be16 u6_addr16[8];
+        __be32 u6_addr32[4];
+    } in6_u;
+#define s6_addr in6_u.u6_addr8
+#define s6_addr16 in6_u.u6_addr16
+#define s6_addr32 in6_u.u6_addr32
+};
+struct sockaddr {
+    __kernel_sa_family_t sa_family;
+    char sa_data[14];
+};
+struct sockaddr_in {
+    __kernel_sa_family_t sin_family;
+    __be16 sin_port;
+    struct in_addr sin_addr;
+    unsigned char sin_zero[8];
+};
+struct sockaddr_in6 {
+    __kernel_sa_family_t sin6_family;
+    __be16 sin6_port;
+    __be32 sin6_flowinfo;
+    struct in6_addr sin6_addr;
+    __be32 sin6_scope_id;
+};
 struct addrinfo {
     int ai_flags;
     int ai_family;
@@ -175,46 +250,9 @@ struct addrinfo {
     struct addrinfo *ai_next;
 };
 
-// IP地址与socket结构体
-struct in_addr {
-    __be32 s_addr;
-};
-
-struct in6_addr {
-    union {
-        __u8 u6_addr8[16];
-        __be16 u6_addr16[8];
-        __be32 u6_addr32[4];
-    } in6_u;
-#define s6_addr in6_u.u6_addr8
-#define s6_addr16 in6_u.u6_addr16
-#define s6_addr32 in6_u.u6_addr32
-};
-
-struct sockaddr {
-    __kernel_sa_family_t sa_family;
-    char sa_data[14];
-};
-
-struct sockaddr_in {
-    __kernel_sa_family_t sin_family;
-    __be16 sin_port;
-    struct in_addr sin_addr;
-    unsigned char sin_zero[8];
-};
-
-struct sockaddr_in6 {
-    __kernel_sa_family_t sin6_family;
-    __be16 sin6_port;
-    __be32 sin6_flowinfo;
-    struct in6_addr sin6_addr;
-    __be32 sin6_scope_id;
-};
-
-// 核心函数：手动实现 inet_ntop（IP地址转字符串）
+// 12. IP地址转字符串函数（手动实现）
 static const char *inet_ntop(int family, const void *addr, char *buf, size_t buf_len) {
     if (!addr || !buf || buf_len == 0) return NULL;
-
     switch (family) {
         case AF_INET: {
             const struct in_addr *ipv4 = (const struct in_addr *)addr;
@@ -242,17 +280,6 @@ static const char *inet_ntop(int family, const void *addr, char *buf, size_t buf
     }
 }
 
-// 容器_of 宏（确保已定义）
-#ifndef container_of
-#define container_of(ptr, type, member) ({ \
-    const typeof(((type *)0)->member) *__mptr = (ptr); \
-    (type *)((char *)__mptr - offsetof(type, member)); })
-#endif
-
-#ifndef offsetof
-#define offsetof(type, member) ((size_t)&((type *)0)->member)
-#endif
-
 // ###########################################################################
 // 模块元信息
 // ###########################################################################
@@ -271,7 +298,6 @@ KPM_DESCRIPTION("Android 内核网络优化模块：TCP参数调优 + 恶意网�
 #define TCP_KEEPALIVE_TIME 300
 #define TCP_KEEPALIVE_INTVL 60
 #define TCP_KEEPALIVE_PROBES 3
-
 #define DNS_CACHE_TTL 300
 #define DNS_MAX_CACHE_ENTRIES 128
 #define DNS_CACHE_LOCK_SPINLOCK
@@ -304,23 +330,21 @@ struct dns_cache_entry {
     } addr;
     int family;
     unsigned long expire_jiffies;
-    struct list_head list;        // 使用框架定义的list_head
-    struct hlist_node hash_node;  // 使用框架定义的hlist_node
+    struct list_head list;
+    struct hlist_node hash_node; // 与hlist_for_each_entry参数一致
 };
-
 struct dns_cache {
-    struct hlist_head *hash_table; // 使用框架定义的hlist_head
-    struct list_head lru_list;     // 使用框架定义的list_head
+    struct hlist_head *hash_table;
+    struct list_head lru_list;
     unsigned int size;
     unsigned int max_size;
     unsigned int ttl;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spinlock_t lock;               // 使用框架定义的spinlock_t
+    spinlock_t lock; // 已手动定义spinlock_t
 #else
     mutex_t lock;
 #endif
 };
-
 static struct dns_cache *dns_cache_global = NULL;
 
 // ###########################################################################
@@ -332,13 +356,10 @@ static int is_port_allowed(__be16 port) {
     }
     return 0;
 }
-
 static int match_domain_prefix(const char *domain, const char *prefix) {
     size_t prefix_len = strlen(prefix);
     return strncmp(domain, prefix, prefix_len) == 0;
 }
-
-// 修复指针类型不匹配：统一转为void*
 static int get_target_addr(struct sockaddr *sa, char *buf, size_t buf_len) {
     if (!sa || !buf) return -EINVAL;
     void *addr_ptr = NULL;
@@ -351,7 +372,6 @@ static int get_target_addr(struct sockaddr *sa, char *buf, size_t buf_len) {
     }
     return inet_ntop(sa->sa_family, addr_ptr, buf, buf_len) ? 0 : -EINVAL;
 }
-
 static unsigned int dns_domain_hash(const char *domain) {
     unsigned int hash = 5381;
     int c;
@@ -365,7 +385,6 @@ static unsigned int dns_domain_hash(const char *domain) {
 // DNS缓存核心操作
 // ###########################################################################
 static int dns_cache_init(void) {
-    // 使用kzalloc（框架兼容版）
     dns_cache_global = kzalloc(sizeof(struct dns_cache), GFP_KERNEL);
     if (!dns_cache_global) return -ENOMEM;
 
@@ -375,15 +394,15 @@ static int dns_cache_init(void) {
         return -ENOMEM;
     }
     for (int i = 0; i < DNS_MAX_CACHE_ENTRIES; ++i) {
-        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]); // 框架提供的宏
+        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]); // 手动实现的宏
     }
 
-    INIT_LIST_HEAD(&dns_cache_global->lru_list); // 框架提供的宏
+    INIT_LIST_HEAD(&dns_cache_global->lru_list); // 手动实现的宏
     dns_cache_global->size = 0;
     dns_cache_global->max_size = DNS_MAX_CACHE_ENTRIES;
     dns_cache_global->ttl = DNS_CACHE_TTL;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_init(&dns_cache_global->lock); // 适配后的宏
+    spin_lock_init(&dns_cache_global->lock); // 手动实现的宏
 #else
     mutex_init(&dns_cache_global->lock);
 #endif
@@ -392,26 +411,25 @@ static int dns_cache_init(void) {
             DNS_MAX_CACHE_ENTRIES, DNS_CACHE_TTL);
     return 0;
 }
-
 static void dns_cache_destroy(void) {
     if (!dns_cache_global) return;
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock(&dns_cache_global->lock); // 适配后的宏
+    spin_lock(&dns_cache_global->lock); // 手动实现的宏
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
 
     struct list_head *pos, *n;
-    list_for_each_safe(pos, n, &dns_cache_global->lru_list) { // 框架提供的宏
-        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list); // 框架提供的宏
-        hlist_del(&entry->hash_node); // 框架提供的宏
-        list_del(&entry->list); // 框架提供的宏
+    list_for_each_safe(pos, n, &dns_cache_global->lru_list) { // 手动实现的宏
+        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list); // 手动实现的宏
+        hlist_del(&entry->hash_node); // 手动实现的宏
+        list_del(&entry->list); // 手动实现的宏
         kfree(entry);
     }
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_unlock(&dns_cache_global->lock); // 适配后的宏
+    spin_unlock(&dns_cache_global->lock); // 手动实现的宏
 #else
     mutex_unlock(&dns_cache_global->lock);
 #endif
@@ -421,7 +439,6 @@ static void dns_cache_destroy(void) {
     dns_cache_global = NULL;
     pr_info("[NetOpt++] DNS cache destroyed\n");
 }
-
 static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) {
     if (!dns_cache_global || !domain || (family != AF_INET && family != AF_INET6)) {
         return NULL;
@@ -429,21 +446,20 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
 
     unsigned long flags = 0;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_irqsave(&dns_cache_global->lock, flags); // 适配后的宏
+    spin_lock_irqsave(&dns_cache_global->lock, flags); // 手动实现的宏
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
 
     unsigned int hash = dns_domain_hash(domain);
     struct dns_cache_entry *entry = NULL;
-    struct hlist_node *hpos;
-    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 框架提供的宏
+    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 手动实现的宏
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
             if (time_before(jiffies, entry->expire_jiffies)) {
                 list_del(&entry->list);
-                list_add(&entry->list, &dns_cache_global->lru_list); // 框架提供的宏
+                list_add(&entry->list, &dns_cache_global->lru_list); // 手动实现的宏
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-                spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 适配后的宏
+                spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 手动实现的宏
 #else
                 mutex_unlock(&dns_cache_global->lock);
 #endif
@@ -460,19 +476,17 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
     }
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 适配后的宏
+    spin_unlock_irqrestore(&dns_cache_global->lock, flags);
 #else
     mutex_unlock(&dns_cache_global->lock);
 #endif
 
     return NULL;
 }
-
 static int dns_cache_add(const char *domain, const void *addr, int family) {
     if (!dns_cache_global || !domain || !addr || (family != AF_INET && family != AF_INET6)) {
         return -EINVAL;
     }
-
     if (strlen(domain) >= NI_MAXHOST) {
         pr_warn("[NetOpt++] DNS domain too long: %s\n", domain);
         return -EINVAL;
@@ -480,14 +494,13 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
 
     unsigned long flags = 0;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_irqsave(&dns_cache_global->lock, flags); // 适配后的宏
+    spin_lock_irqsave(&dns_cache_global->lock, flags);
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
 
     unsigned int hash = dns_domain_hash(domain);
     struct dns_cache_entry *entry = NULL;
-    struct hlist_node *hpos;
     hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) {
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
             if (family == AF_INET) {
@@ -526,7 +539,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
     }
     entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ);
     INIT_LIST_HEAD(&entry->list);
-    INIT_HLIST_NODE(&entry->hash_node); // 补充的宏
+    INIT_HLIST_NODE(&entry->hash_node);
 
     if (dns_cache_global->size >= dns_cache_global->max_size) {
         struct dns_cache_entry *lru_entry = list_entry(dns_cache_global->lru_list.prev,
@@ -537,7 +550,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
         dns_cache_global->size--;
     }
 
-    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]); // 框架提供的宏
+    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]); // 手动实现的宏
     list_add(&entry->list, &dns_cache_global->lru_list);
     dns_cache_global->size++;
 
@@ -555,7 +568,6 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
 // ###########################################################################
 static int tcp_optimize_init(void) {
     int ret = 0;
-
 #ifdef CONFIG_TCP_CONG_BBR
     ret = sysctl_set_str("net.ipv4.tcp_congestion_control", TCP_CONGESTION_ALG);
 #else
@@ -566,24 +578,20 @@ static int tcp_optimize_init(void) {
         pr_err("[NetOpt++] Set congestion control failed: %d\n", ret);
         return ret;
     }
-
     ret = sysctl_set_int("net.ipv4.tcp_fastopen", TCP_FASTOPEN_QSIZE);
     if (ret) {
         pr_err("[NetOpt++] Enable TCP fastopen failed: %d\n", ret);
         return ret;
     }
-
     sysctl_set_int("net.ipv4.tcp_max_syn_backlog", TCP_MAX_SYN_BACKLOG);
     sysctl_set_int("net.ipv4.tcp_window_scaling", 1);
     sysctl_set_int("net.ipv4.tcp_keepalive_time", TCP_KEEPALIVE_TIME);
     sysctl_set_int("net.ipv4.tcp_keepalive_intvl", TCP_KEEPALIVE_INTVL);
     sysctl_set_int("net.ipv4.tcp_keepalive_probes", TCP_KEEPALIVE_PROBES);
-
     pr_info("[NetOpt++] TCP optimized: alg=%s, fastopen=%d\n",
             TCP_CONGESTION_ALG, TCP_FASTOPEN_QSIZE);
     return 0;
 }
-
 static void tcp_optimize_restore(void) {
     sysctl_set_str("net.ipv4.tcp_congestion_control", "cubic");
     sysctl_set_int("net.ipv4.tcp_fastopen", 0);
@@ -624,7 +632,6 @@ static void before_connect(hook_fargs3_t *args, void *udata) {
         }
     }
 }
-
 static void before_sendto(hook_fargs6_t *args, void *udata) {
     int fd = (int)syscall_argn(args, 0);
     struct sockaddr __user *addr_user = (struct sockaddr __user *)syscall_argn(args, 4);
@@ -658,7 +665,6 @@ static void before_sendto(hook_fargs6_t *args, void *udata) {
         }
     }
 }
-
 static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
     if (args->ret != 0) return;
 
@@ -789,7 +795,6 @@ init_fail:
 #endif
     return -EINVAL;
 }
-
 static long netopt_exit(void *__user reserved) {
     pr_info("[NetOpt++] Exiting...\n");
 
