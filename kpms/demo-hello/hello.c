@@ -8,8 +8,7 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-// 核心修复：删除 linux/net.h 包含（框架未提供，且功能已覆盖）
-#include <linux/in.h>
+// 核心修复1：删除 linux/in.h（框架未提供）
 #include <linux/inet.h>
 #include <linux/tcp.h>
 #include <linux/sysctl.h>
@@ -23,9 +22,22 @@
 #include <netdb.h>
 
 // ###########################################################################
-// 手动补充所有缺失的socket核心定义（替代 linux/socket.h + asm-generic/socket.h）
+// 手动补充所有缺失的核心定义（替代 linux/socket.h + linux/in.h + asm-generic/socket.h）
 // ###########################################################################
-// 地址族定义
+// 1. 字节序转换宏（来自 linux/in.h，必须补充，代码中用到 htons/ntohs）
+#ifndef __BIG_ENDIAN
+#define htons(x) ((__be16)((((x) & 0xff) << 8) | (((x) & 0xff00) >> 8)))
+#define ntohs(x) htons(x)
+#define htonl(x) ((__be32)((((x) & 0xff) << 24) | (((x) & 0xff00) << 8) | (((x) & 0xff0000) >> 8) | (((x) & 0xff000000) >> 24)))
+#define ntohl(x) htonl(x)
+#else
+#define htons(x) ((__be16)(x))
+#define ntohs(x) ((__u16)(x))
+#define htonl(x) ((__be32)(x))
+#define ntohl(x) ((__u32)(x))
+#endif
+
+// 2. 地址族定义
 #ifndef AF_INET
 #define AF_INET 2       // IPv4
 #endif
@@ -36,7 +48,7 @@
 #define AF_UNSPEC 0     // 未指定地址族
 #endif
 
-// 套接字类型定义
+// 3. 套接字类型定义
 #ifndef SOCK_STREAM
 #define SOCK_STREAM 1   // TCP
 #endif
@@ -44,7 +56,7 @@
 #define SOCK_DGRAM 2    // UDP
 #endif
 
-// 协议类型定义
+// 4. 协议类型定义
 #ifndef IPPROTO_TCP
 #define IPPROTO_TCP 6
 #endif
@@ -52,7 +64,7 @@
 #define IPPROTO_UDP 17
 #endif
 
-// 辅助宏定义
+// 5. 辅助宏定义
 #ifndef SOL_SOCKET
 #define SOL_SOCKET 1
 #endif
@@ -62,13 +74,31 @@
 #ifndef INET6_ADDRSTRLEN
 #define INET6_ADDRSTRLEN 46 // IPv6地址字符串最大长度
 #endif
+#ifndef __be16
+#define __be16 unsigned short
+#endif
+#ifndef __be32
+#define __be32 unsigned int
+#endif
+#ifndef __u8
+#define __u8 unsigned char
+#endif
+#ifndef __u16
+#define __u16 unsigned short
+#endif
+#ifndef __u32
+#define __u32 unsigned int
+#endif
+#ifndef __kernel_sa_family_t
+#define __kernel_sa_family_t unsigned short
+#endif
 
-// IPv4地址结构体
+// 6. IPv4地址结构体
 struct in_addr {
     __be32 s_addr;
 };
 
-// IPv6地址结构体
+// 7. IPv6地址结构体
 struct in6_addr {
     union {
         __u8 u6_addr8[16];
@@ -80,13 +110,13 @@ struct in6_addr {
 #define s6_addr32 in6_u.u6_addr32
 };
 
-// 通用socket地址结构体
+// 8. 通用socket地址结构体
 struct sockaddr {
     __kernel_sa_family_t sa_family; // 地址族
     char sa_data[14];               // 地址数据
 };
 
-// IPv4 socket地址结构体
+// 9. IPv4 socket地址结构体
 struct sockaddr_in {
     __kernel_sa_family_t sin_family; // AF_INET
     __be16 sin_port;                 // 端口号（网络字节序）
@@ -94,7 +124,7 @@ struct sockaddr_in {
     unsigned char sin_zero[8];       // 填充字段
 };
 
-// IPv6 socket地址结构体
+// 10. IPv6 socket地址结构体
 struct sockaddr_in6 {
     __kernel_sa_family_t sin6_family; // AF_INET6
     __be16 sin6_port;                 // 端口号（网络字节序）
@@ -103,7 +133,7 @@ struct sockaddr_in6 {
     __be32 sin6_scope_id;             // 作用域ID
 };
 
-// getaddrinfo 相关结构体
+// 11. getaddrinfo 相关结构体
 struct addrinfo {
     int ai_flags;                     // 标志位
     int ai_family;                    // 地址族
