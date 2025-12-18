@@ -1,7 +1,6 @@
 #include <compiler.h>
 #include <kpmodule.h>
 #include <linux/printk.h>
-// 核心修复：移除 asm-generic/unistd.h，框架已内置 syscall 编号定义
 #include <linux/uaccess.h>
 #include <syscall.h>
 #include <linux/string.h>
@@ -9,7 +8,9 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-#include <linux/socket.h>
+// 核心修复：移除 linux/socket.h，改用 asm-generic 完整替代
+#include <asm-generic/socket.h>
+#include <asm-generic/errno.h>
 #include <linux/net.h>
 #include <linux/in.h>
 #include <linux/inet.h>
@@ -23,8 +24,23 @@
 #include <linux/jiffies.h>
 #include <linux/time.h>
 #include <netdb.h>
-#include <asm-generic/socket.h>
-#include <asm-generic/errno.h>
+
+// 补充 socket 相关宏定义（替换 linux/socket.h 的核心依赖）
+#ifndef SOCK_STREAM
+#define SOCK_STREAM 1
+#endif
+#ifndef SOCK_DGRAM
+#define SOCK_DGRAM 2
+#endif
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
+#ifndef SOL_SOCKET
+#define SOL_SOCKET 1
+#endif
 
 // 模块元信息
 KPM_NAME("NetOpt++");
