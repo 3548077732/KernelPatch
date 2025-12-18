@@ -6,24 +6,26 @@
 #include <syscall.h>
 #include <linux/string.h>
 #include <kputils.h>
-#include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>    // For EACCES and EPERM
 #include <accctl.h>         // For set_priv_sel_allow and related functions
 #include <uapi/linux/limits.h>   // For PATH_MAX
 #include <linux/kernel.h>   // For snprintf
-#include <linux/sched.h>    // 补充struct task_struct定义（current依赖）
+
+// 补充必要的前向声明（完全不依赖asm/current.h）
+struct task_struct;  // 前向声明进程结构体
+struct mm_struct;    // 前向声明内存管理结构体
+struct file;         // 前向声明文件结构体
+struct path;         // 前向声明路径结构体
+
+// 显式声明内核标准函数（替代current宏）
+extern struct task_struct *get_current(void);
+extern char *d_path(const struct path *path, char *buf, size_t buflen);
 
 // 补充pr_debug定义，避免隐式声明警告
 #ifndef pr_debug
 #define pr_debug(fmt, ...) pr_info("[DEBUG] " fmt, ##__VA_ARGS__)
 #endif
-
-// 兼容定义：避免依赖linux/path.h（部分编译环境无此头文件）
-struct path; // 前向声明，满足d_path函数参数要求
-
-// 内核d_path函数声明（部分环境可能未自动包含，显式声明避免隐式警告）
-extern char *d_path(const struct path *path, char *buf, size_t buflen);
 
 KPM_NAME("HMA++ Next");
 KPM_VERSION("1.5");
@@ -301,24 +303,39 @@ static const char *allow_folder_list[] = {
 };
 #define ALLOW_FOLDER_SIZE (sizeof(allow_folder_list)/sizeof(allow_folder_list[0]))
 
-// 判断当前进程是否为/system路径下的应用（兼容版：移除linux/path.h依赖）
+// 判断当前进程是否为/system路径下的应用（无current依赖版）
 static int is_system_path_app(void) {
     char exe_path[PATH_MAX];
     int ret;
+    struct task_struct *task;
+    struct mm_struct *mm;
+    struct file *exe_file;
+    struct path *f_path;
 
-    // 安全校验：避免空指针引用（current、mm、exe_file均可能为NULL）
-    if (!current || !current->mm || !current->mm->exe_file) {
-        return 0;
-    }
+    // 1. 使用内核标准函数get_current()获取当前进程（替代current宏）
+    task = get_current();
+    if (!task) return 0;
 
-    // 直接调用d_path，依赖内核内部struct path定义（无需显式包含头文件）
-    ret = d_path((const struct path *)&current->mm->exe_file->f_path, exe_path, sizeof(exe_path));
+    // 2. 通过偏移量访问mm成员（避免依赖结构体完整定义）
+    mm = *(struct mm_struct **)((char *)task + offsetof(struct task_struct, mm));
+    if (!mm) return 0;
+
+    // 3. 通过偏移量访问exe_file成员
+    exe_file = *(struct file **)((char *)mm + offsetof(struct mm_struct, exe_file));
+    if (!exe_file) return 0;
+
+    // 4. 通过偏移量访问f_path成员
+    f_path = (struct path *)((char *)exe_file + offsetof(struct file, f_path));
+    if (!f_path) return 0;
+
+    // 5. 调用d_path获取进程可执行文件路径
+    ret = d_path(f_path, exe_path, sizeof(exe_path));
     if (ret < 0 || ret >= sizeof(exe_path)) {
         return 0; // 路径获取失败，不视为系统应用
     }
-    exe_path[ret] = '\0';
+    exe_path[ret] = '\0'; // 正确终止字符串
 
-    // 判断路径是否以/system/开头（覆盖/system/app、/system/priv-app等所有系统目录）
+    // 6. 判断路径是否以/system/开头（覆盖所有系统目录）
     if (strncmp(exe_path, SYSTEM_PATH_PREFIX, SYSTEM_PATH_LEN) == 0) {
         pr_debug("[HMA++]Allow system path app: %s\n", exe_path);
         return 1;
