@@ -8,13 +8,13 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-#include <linux/limits.h>
+// 核心修复1：删除 linux/limits.h（手动定义已覆盖所需常量）
 #include <linux/kernel.h>
 
 // ###########################################################################
-// 手动补充所有缺失的核心定义（替代被移除的6个头文件）
+// 手动补充所有缺失的核心定义（替代所有被移除的头文件）
 // ###########################################################################
-// 1. 基础类型与字节序宏（保留之前的定义）
+// 1. 基础类型与字节序宏
 #ifndef __BIG_ENDIAN
 #define htons(x) ((__be16)((((x) & 0xff) << 8) | (((x) & 0xff00) >> 8)))
 #define ntohs(x) htons(x)
@@ -48,6 +48,7 @@
 #ifndef SOL_SOCKET
 #define SOL_SOCKET 1
 #endif
+// 手动定义核心常量（原来自 linux/limits.h，已覆盖）
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
 #endif
@@ -107,7 +108,7 @@ struct list_head {
 #define list_entry(ptr, type, member) \
     container_of(ptr, type, member)
 
-// 3. 替代 linux/spinlock.h：自旋锁结构体与操作宏（简化实现，框架兼容）
+// 3. 替代 linux/spinlock.h：自旋锁结构体与操作宏
 typedef struct {
     unsigned int lock;
 } spinlock_t;
@@ -126,7 +127,7 @@ typedef struct {
     local_irq_restore(flags); \
 } while (0)
 
-// 互斥锁（备用，当前代码用自旋锁）
+// 互斥锁（备用）
 typedef struct {
     spinlock_t lock;
     int count;
@@ -141,12 +142,12 @@ typedef struct {
 
 // 4. 替代 linux/jiffies.h：jiffies 与 HZ 定义
 extern unsigned long jiffies;
-#define HZ 100 // 内核默认节拍数（兼容多数Android设备）
+#define HZ 100 // 兼容多数Android设备内核
 
 // 5. 替代 linux/time.h：时间比较宏
 #define time_before(a, b) ((long)(a) - (long)(b) < 0)
 
-// 6. 替代 netdb.h：addrinfo 结构体（保留之前的手动定义）
+// 6. addrinfo 结构体（替代 netdb.h）
 struct addrinfo {
     int ai_flags;
     int ai_family;
@@ -158,7 +159,7 @@ struct addrinfo {
     struct addrinfo *ai_next;
 };
 
-// 7. IP地址与socket结构体（保留之前的定义）
+// 7. IP地址与socket结构体
 struct in_addr {
     __be32 s_addr;
 };
@@ -194,7 +195,7 @@ struct sockaddr_in6 {
     __be32 sin6_scope_id;
 };
 
-// 8. 哈希链表（hlist）结构体与操作宏（原依赖 linux/list.h，手动补充）
+// 8. 哈希链表（hlist）结构体与操作宏
 struct hlist_node {
     struct hlist_node *next, **pprev;
 };
@@ -255,7 +256,7 @@ static const char *inet_ntop(int family, const void *addr, char *buf, size_t buf
     }
 }
 
-// 10. 容器_of 宏（链表/哈希表必备，原依赖 linux/kernel.h，确保已定义）
+// 10. 容器_of 宏（确保已定义）
 #ifndef container_of
 #define container_of(ptr, type, member) ({ \
     const typeof(((type *)0)->member) *__mptr = (ptr); \
@@ -317,20 +318,20 @@ struct dns_cache_entry {
     } addr;
     int family;
     unsigned long expire_jiffies;
-    struct list_head list;        // 链表节点（手动定义的list_head）
-    struct hlist_node hash_node;  // 哈希表节点（手动定义的hlist_node）
+    struct list_head list;
+    struct hlist_node hash_node;
 };
 
 struct dns_cache {
-    struct hlist_head *hash_table; // 哈希表（手动定义的hlist_head）
-    struct list_head lru_list;     // LRU链表（手动定义的list_head）
+    struct hlist_head *hash_table;
+    struct list_head lru_list;
     unsigned int size;
     unsigned int max_size;
     unsigned int ttl;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spinlock_t lock;               // 自旋锁（手动定义的spinlock_t）
+    spinlock_t lock;
 #else
-    mutex_t lock;                  // 互斥锁（手动定义的mutex_t）
+    mutex_t lock;
 #endif
 };
 
@@ -371,7 +372,6 @@ static unsigned int dns_domain_hash(const char *domain) {
 // DNS缓存核心操作
 // ###########################################################################
 static int dns_cache_init(void) {
-    // kzalloc/kfree 依赖框架兼容（KernelPatch 内置内核内存分配接口）
     dns_cache_global = kzalloc(sizeof(struct dns_cache), GFP_KERNEL);
     if (!dns_cache_global) return -ENOMEM;
 
@@ -381,17 +381,17 @@ static int dns_cache_init(void) {
         return -ENOMEM;
     }
     for (int i = 0; i < DNS_MAX_CACHE_ENTRIES; ++i) {
-        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]); // 手动定义的宏
+        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]);
     }
 
-    INIT_LIST_HEAD(&dns_cache_global->lru_list); // 手动定义的宏
+    INIT_LIST_HEAD(&dns_cache_global->lru_list);
     dns_cache_global->size = 0;
     dns_cache_global->max_size = DNS_MAX_CACHE_ENTRIES;
     dns_cache_global->ttl = DNS_CACHE_TTL;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_init(&dns_cache_global->lock); // 手动定义的宏
+    spin_lock_init(&dns_cache_global->lock);
 #else
-    mutex_init(&dns_cache_global->lock); // 手动定义的宏
+    mutex_init(&dns_cache_global->lock);
 #endif
 
     pr_info("[NetOpt++] DNS cache initialized: max entries=%d, TTL=%ds\n",
@@ -403,24 +403,23 @@ static void dns_cache_destroy(void) {
     if (!dns_cache_global) return;
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock(&dns_cache_global->lock); // 手动定义的宏
+    spin_lock(&dns_cache_global->lock);
 #else
-    mutex_lock(&dns_cache_global->lock); // 手动定义的宏
+    mutex_lock(&dns_cache_global->lock);
 #endif
 
-    // 手动定义的 list_for_each_safe 宏
     struct list_head *pos, *n;
     list_for_each_safe(pos, n, &dns_cache_global->lru_list) {
-        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list); // 手动定义的宏
-        hlist_del(&entry->hash_node); // 手动定义的宏
-        list_del(&entry->list); // 手动定义的宏
+        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list);
+        hlist_del(&entry->hash_node);
+        list_del(&entry->list);
         kfree(entry);
     }
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_unlock(&dns_cache_global->lock); // 手动定义的宏
+    spin_unlock(&dns_cache_global->lock);
 #else
-    mutex_unlock(&dns_cache_global->lock); // 手动定义的宏
+    mutex_unlock(&dns_cache_global->lock);
 #endif
 
     kfree(dns_cache_global->hash_table);
@@ -436,7 +435,7 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
 
     unsigned long flags = 0;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_irqsave(&dns_cache_global->lock, flags); // 手动定义的宏
+    spin_lock_irqsave(&dns_cache_global->lock, flags);
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
@@ -444,14 +443,13 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
     unsigned int hash = dns_domain_hash(domain);
     struct hlist_node *hpos;
     struct dns_cache_entry *entry = NULL;
-    // 手动定义的 hlist_for_each_entry 宏
     hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) {
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
-            if (time_before(jiffies, entry->expire_jiffies)) { // 手动定义的宏
+            if (time_before(jiffies, entry->expire_jiffies)) {
                 list_del(&entry->list);
-                list_add(&entry->list, &dns_cache_global->lru_list); // 手动定义的宏
+                list_add(&entry->list, &dns_cache_global->lru_list);
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-                spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 手动定义的宏
+                spin_unlock_irqrestore(&dns_cache_global->lock, flags);
 #else
                 mutex_unlock(&dns_cache_global->lock);
 #endif
@@ -502,7 +500,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
             } else {
                 entry->addr.ipv6 = *(struct in6_addr *)addr;
             }
-            entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ); // HZ 手动定义
+            entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ);
             list_del(&entry->list);
             list_add(&entry->list, &dns_cache_global->lru_list);
 #ifdef DNS_CACHE_LOCK_SPINLOCK
@@ -544,7 +542,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
         dns_cache_global->size--;
     }
 
-    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]); // 手动定义的宏
+    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]);
     list_add(&entry->list, &dns_cache_global->lru_list);
     dns_cache_global->size++;
 
@@ -802,8 +800,6 @@ static long netopt_exit(void *__user reserved) {
 
     tcp_optimize_restore();
     dns_cache_destroy();
-
-    unhook_destroy();
 
     unhook_syscalln(__NR_connect, before_connect, NULL);
     unhook_syscalln(__NR_sendto, before_sendto, NULL);
