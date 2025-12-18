@@ -2,7 +2,8 @@
 #include <kpmodule.h>
 #include <kputils.h>
 #include <syscall.h>
-// 仅保留框架核心头文件，所有其他组件完全手动实现
+// 强制包含框架核心类型头文件，确保所有结构体/宏可用
+#include <kernel/include/ktypes.h>
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <asm/current.h>
@@ -10,139 +11,95 @@
 #include <linux/kernel.h>
 
 // ###########################################################################
-// 1. 基础类型定义（完全独立，不依赖框架）
+// 仅补充框架未提供的基础定义，绝不重复框架已有内容
 // ###########################################################################
 #ifndef GFP_KERNEL
 #define GFP_KERNEL 0
 #endif
+#ifndef __be16
 typedef unsigned short __be16;
+#endif
+#ifndef __be32
 typedef unsigned int __be32;
+#endif
+#ifndef __u8
 typedef unsigned char __u8;
+#endif
+#ifndef __u16
 typedef unsigned short __u16;
+#endif
+#ifndef __u32
 typedef unsigned int __u32;
+#endif
+#ifndef __u64
 typedef unsigned long __u64;
+#endif
+#ifndef __kernel_sa_family_t
 typedef unsigned short __kernel_sa_family_t;
+#endif
+#ifndef socklen_t
 typedef unsigned int socklen_t;
+#endif
+#ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
+#endif
+#ifndef INET6_ADDRSTRLEN
 #define INET6_ADDRSTRLEN 46
+#endif
 
-// 2. 字节序宏（独立实现）
+// 2. 字节序宏（框架未提供时补充）
+#ifndef htons
 #define htons(x) ((__be16)((((x) & 0xff) << 8) | (((x) & 0xff00) >> 8)))
+#endif
+#ifndef ntohs
 #define ntohs(x) htons(x)
+#endif
+#ifndef htonl
 #define htonl(x) ((__be32)((((x) & 0xff) << 24) | (((x) & 0xff00) << 8) | (((x) & 0xff0000) >> 8) | (((x) & 0xff000000) >> 24)))
+#endif
+#ifndef ntohl
 #define ntohl(x) htonl(x)
+#endif
 
-// 3. 网络相关宏（独立实现）
+// 3. 网络相关宏（框架未提供时补充）
+#ifndef AF_INET
 #define AF_INET 2
+#endif
+#ifndef AF_INET6
 #define AF_INET6 10
+#endif
+#ifndef SOCK_STREAM
 #define SOCK_STREAM 1
+#endif
+#ifndef SOCK_DGRAM
 #define SOCK_DGRAM 2
+#endif
+#ifndef IPPROTO_TCP
 #define IPPROTO_TCP 6
+#endif
+#ifndef IPPROTO_UDP
 #define IPPROTO_UDP 17
+#endif
+#ifndef SOL_SOCKET
 #define SOL_SOCKET 1
+#endif
+#ifndef EAFNOSUPPORT
 #define EAFNOSUPPORT 97
+#endif
+#ifndef EACCES
 #define EACCES 13
+#endif
 
-// 4. 链表结构体+操作宏（完全独立实现，无框架依赖）
-struct list_head {
-    struct list_head *next, *prev;
-};
-#define INIT_LIST_HEAD(ptr) do { \
-    (ptr)->next = (ptr); (ptr)->prev = (ptr); \
-} while (0)
-#define list_add(new_node, head) do { \
-    struct list_head *prev = (head); \
-    struct list_head *next = (head)->next; \
-    new_node->prev = prev; \
-    new_node->next = next; \
-    prev->next = new_node; \
-    next->prev = new_node; \
-} while (0)
-#define list_del(entry) do { \
-    struct list_head *prev = (entry)->prev; \
-    struct list_head *next = (entry)->next; \
-    prev->next = next; \
-    next->prev = prev; \
-} while (0)
-#define list_for_each_safe(pos, n, head) \
-    for ((pos) = (head)->next, (n) = (pos)->next; (pos) != (head); \
-         (pos) = (n), (n) = (pos)->next)
-#define list_entry(ptr, type, member) ({ \
-    const typeof(((type *)0)->member) *__mptr = (ptr); \
-    (type *)((char *)__mptr - offsetof(type, member)); })
-
-// 5. 哈希链表结构体+操作宏（完全独立实现）
-struct hlist_node {
-    struct hlist_node *next, **pprev;
-};
-struct hlist_head {
-    struct hlist_node *first;
-};
-#define INIT_HLIST_HEAD(head) do { (head)->first = NULL; } while (0)
-#define INIT_HLIST_NODE(n) do { \
-    (n)->next = NULL; \
-    (n)->pprev = NULL; \
-} while (0)
-#define hlist_add_head(n, head) do { \
-    if (((n)->next = (head)->first) != NULL) \
-        (head)->first->pprev = &(n)->next; \
-    (head)->first = (n); \
-    (n)->pprev = &(head)->first; \
-} while (0)
-#define hlist_del(n) do { \
-    if ((n)->next != NULL) \
-        (n)->next->pprev = (n)->pprev; \
-    *(n)->pprev = (n)->next; \
-} while (0)
-#define hlist_for_each_entry(pos, head, member) \
-    for (pos = (head)->first ? list_entry((head)->first, typeof(*pos), member) : NULL; \
-         pos != NULL; \
-         pos = (pos)->member.next ? list_entry((pos)->member.next, typeof(*pos), member) : NULL)
-
-// 6. 自旋锁结构体+操作宏（独立实现，无框架依赖，语法绝对正确）
-typedef struct {
-    volatile unsigned int lock; // volatile确保原子操作可见性
-} spinlock_t;
-#define spin_lock_init(lock_ptr) do { \
-    (lock_ptr)->lock = 0; \
-} while (0)
-#define spin_lock(lock_ptr) do { \
-    while (__atomic_exchange_n(&(lock_ptr)->lock, 1, __ATOMIC_ACQUIRE)); \
-} while (0)
-#define spin_unlock(lock_ptr) do { \
-    __atomic_store_n(&(lock_ptr)->lock, 0, __ATOMIC_RELEASE); \
-} while (0)
-#define spin_lock_irqsave(lock_ptr, flags) do { \
-    (flags) = 0; \
-    spin_lock(lock_ptr); \
-} while (0)
-#define spin_unlock_irqrestore(lock_ptr, flags) do { \
-    spin_unlock(lock_ptr); \
-    (void)flags; \
-} while (0)
-
-// 7. 互斥锁（备用，独立实现）
-typedef struct {
-    spinlock_t lock;
-    int count;
-} mutex_t;
-#define mutex_init(mutex_ptr) do { \
-    spin_lock_init(&(mutex_ptr)->lock); \
-    (mutex_ptr)->count = 0; \
-} while (0)
-#define mutex_lock(mutex_ptr) spin_lock(&(mutex_ptr)->lock)
-#define mutex_unlock(mutex_ptr) spin_unlock(&(mutex_ptr)->lock)
-
-// 8. 时间相关定义（独立实现）
+// 4. 时间相关定义（框架未提供时补充）
 extern unsigned long jiffies;
+#ifndef HZ
 #define HZ 100
+#endif
+#ifndef time_before
 #define time_before(a, b) ((long)(a) - (long)(b) < 0)
+#endif
 
-// 9. 容器宏（独立实现，链表必备）
-#define offsetof(type, member) ((size_t)&((type *)0)->member)
-#define container_of(ptr, type, member) list_entry(ptr, type, member)
-
-// 10. 内存/字符串函数声明（兼容框架环境）
+// 5. 内存/字符串函数声明（兼容框架环境）
 extern void *kmalloc(size_t size, int flags);
 extern void kfree(void *ptr);
 static inline void *kzalloc(size_t size, int flags) {
@@ -160,13 +117,13 @@ extern void kp_free_user(void __user *ptr);
 extern int sysctl_set_str(const char *path, const char *val);
 extern int sysctl_set_int(const char *path, int val);
 
-// 11. 调试打印宏（兼容框架）
+// 6. 调试打印宏（兼容框架）
 #ifndef pr_debug
 #define pr_debug(fmt, ...) pr_info(fmt, ##__VA_ARGS__)
 #endif
 
 // ###########################################################################
-// 网络相关结构体（独立实现，无框架依赖）
+// 网络相关结构体（独立实现，无框架冲突）
 // ###########################################################################
 struct in_addr {
     __be32 s_addr;
@@ -209,7 +166,7 @@ struct addrinfo {
     struct addrinfo *ai_next;
 };
 
-// 12. IP地址转字符串（独立实现）
+// 7. IP地址转字符串（独立实现）
 static const char *inet_ntop(int family, const void *addr, char *buf, size_t buf_len) {
     if (!addr || !buf || buf_len == 0) return NULL;
     switch (family) {
@@ -279,7 +236,7 @@ static const __be16 allowed_ports[] = {
 #define ALLOWED_PORT_SIZE (sizeof(allowed_ports)/sizeof(allowed_ports[0]))
 
 // ###########################################################################
-// DNS缓存数据结构（使用独立实现的链表）
+// DNS缓存数据结构（完全使用框架链表/锁类型）
 // ###########################################################################
 struct dns_cache_entry {
     char domain[NI_MAXHOST];
@@ -289,19 +246,19 @@ struct dns_cache_entry {
     } addr;
     int family;
     unsigned long expire_jiffies;
-    struct list_head list;       // 独立实现的list_head
-    struct hlist_node hash_node; // 独立实现的hlist_node
+    struct list_head list;       // 框架ktypes.h定义的list_head
+    struct hlist_node hash_node; // 框架ktypes.h定义的hlist_node
 };
 struct dns_cache {
-    struct hlist_head *hash_table; // 独立实现的hlist_head
-    struct list_head lru_list;     // 独立实现的list_head
+    struct hlist_head *hash_table; // 框架ktypes.h定义的hlist_head
+    struct list_head lru_list;     // 框架ktypes.h定义的list_head
     unsigned int size;
     unsigned int max_size;
     unsigned int ttl;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spinlock_t lock; // 独立实现的spinlock_t
+    spinlock_t lock; // 框架ktypes.h定义的spinlock_t
 #else
-    mutex_t lock;
+    struct mutex lock; // 框架ktypes.h定义的mutex
 #endif
 };
 static struct dns_cache *dns_cache_global = NULL;
@@ -341,7 +298,7 @@ static unsigned int dns_domain_hash(const char *domain) {
 }
 
 // ###########################################################################
-// DNS缓存核心操作（使用独立实现的链表/锁）
+// DNS缓存核心操作（完全使用框架链表/锁宏）
 // ###########################################################################
 static int dns_cache_init(void) {
     dns_cache_global = kzalloc(sizeof(struct dns_cache), GFP_KERNEL);
@@ -353,17 +310,17 @@ static int dns_cache_init(void) {
         return -EINVAL;
     }
     for (int i = 0; i < DNS_MAX_CACHE_ENTRIES; ++i) {
-        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]); // 独立实现的宏
+        INIT_HLIST_HEAD(&dns_cache_global->hash_table[i]); // 框架ktypes.h宏
     }
 
-    INIT_LIST_HEAD(&dns_cache_global->lru_list); // 独立实现的宏
+    INIT_LIST_HEAD(&dns_cache_global->lru_list); // 框架ktypes.h宏
     dns_cache_global->size = 0;
     dns_cache_global->max_size = DNS_MAX_CACHE_ENTRIES;
     dns_cache_global->ttl = DNS_CACHE_TTL;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_init(&dns_cache_global->lock); // 独立实现的宏，语法绝对正确
+    spin_lock_init(&dns_cache_global->lock); // 框架ktypes.h宏
 #else
-    mutex_init(&dns_cache_global->lock);
+    mutex_init(&dns_cache_global->lock); // 框架ktypes.h宏
 #endif
 
     pr_info("[NetOpt++] DNS cache initialized: max entries=%d, TTL=%ds\n",
@@ -374,23 +331,23 @@ static void dns_cache_destroy(void) {
     if (!dns_cache_global) return;
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock(&dns_cache_global->lock); // 独立实现的宏，无语法错误
+    spin_lock(&dns_cache_global->lock); // 框架ktypes.h宏
 #else
-    mutex_lock(&dns_cache_global->lock);
+    mutex_lock(&dns_cache_global->lock); // 框架ktypes.h宏
 #endif
 
     struct list_head *pos, *n;
-    list_for_each_safe(pos, n, &dns_cache_global->lru_list) { // 独立实现的宏
-        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list); // 独立实现的宏
-        hlist_del(&entry->hash_node); // 独立实现的宏
-        list_del(&entry->list); // 独立实现的宏
+    list_for_each_safe(pos, n, &dns_cache_global->lru_list) { // 框架ktypes.h宏
+        struct dns_cache_entry *entry = list_entry(pos, struct dns_cache_entry, list); // 框架ktypes.h宏
+        hlist_del(&entry->hash_node); // 框架ktypes.h宏
+        list_del(&entry->list); // 框架ktypes.h宏
         kfree(entry);
     }
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_unlock(&dns_cache_global->lock); // 独立实现的宏
+    spin_unlock(&dns_cache_global->lock); // 框架ktypes.h宏
 #else
-    mutex_unlock(&dns_cache_global->lock);
+    mutex_unlock(&dns_cache_global->lock); // 框架ktypes.h宏
 #endif
 
     kfree(dns_cache_global->hash_table);
@@ -405,20 +362,20 @@ static struct dns_cache_entry *dns_cache_lookup(const char *domain, int family) 
 
     unsigned long flags = 0;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_irqsave(&dns_cache_global->lock, flags); // 独立实现的宏
+    spin_lock_irqsave(&dns_cache_global->lock, flags); // 框架ktypes.h宏
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
 
     unsigned int hash = dns_domain_hash(domain);
     struct dns_cache_entry *entry = NULL;
-    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 独立实现的宏
+    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 框架ktypes.h宏
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
             if (time_before(jiffies, entry->expire_jiffies)) {
                 list_del(&entry->list);
-                list_add(&entry->list, &dns_cache_global->lru_list); // 独立实现的宏
+                list_add(&entry->list, &dns_cache_global->lru_list); // 框架ktypes.h宏
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-                spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 独立实现的宏
+                spin_unlock_irqrestore(&dns_cache_global->lock, flags); // 框架ktypes.h宏
 #else
                 mutex_unlock(&dns_cache_global->lock);
 #endif
@@ -453,14 +410,14 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
 
     unsigned long flags = 0;
 #ifdef DNS_CACHE_LOCK_SPINLOCK
-    spin_lock_irqsave(&dns_cache_global->lock, flags);
+    spin_lock_irqsave(&dns_cache_global->lock, flags); // 框架ktypes.h宏
 #else
     mutex_lock(&dns_cache_global->lock);
 #endif
 
     unsigned int hash = dns_domain_hash(domain);
     struct dns_cache_entry *entry = NULL;
-    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) {
+    hlist_for_each_entry(entry, &dns_cache_global->hash_table[hash], hash_node) { // 框架ktypes.h宏
         if (strcmp(entry->domain, domain) == 0 && entry->family == family) {
             if (family == AF_INET) {
                 entry->addr.ipv4 = *(struct in_addr *)addr;
@@ -469,7 +426,7 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
             }
             entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ);
             list_del(&entry->list);
-            list_add(&entry->list, &dns_cache_global->lru_list);
+            list_add(&entry->list, &dns_cache_global->lru_list); // 框架ktypes.h宏
 #ifdef DNS_CACHE_LOCK_SPINLOCK
             spin_unlock_irqrestore(&dns_cache_global->lock, flags);
 #else
@@ -497,20 +454,20 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
         entry->addr.ipv6 = *(struct in6_addr *)addr;
     }
     entry->expire_jiffies = jiffies + (dns_cache_global->ttl * HZ);
-    INIT_LIST_HEAD(&entry->list);
-    INIT_HLIST_NODE(&entry->hash_node);
+    INIT_LIST_HEAD(&entry->list); // 框架ktypes.h宏
+    INIT_HLIST_NODE(&entry->hash_node); // 框架ktypes.h宏
 
     if (dns_cache_global->size >= dns_cache_global->max_size) {
         struct dns_cache_entry *lru_entry = list_entry(dns_cache_global->lru_list.prev,
-                                                      struct dns_cache_entry, list);
+                                                      struct dns_cache_entry, list); // 框架ktypes.h宏
         hlist_del(&lru_entry->hash_node);
         list_del(&lru_entry->list);
         kfree(lru_entry);
         dns_cache_global->size--;
     }
 
-    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]); // 独立实现的宏
-    list_add(&entry->list, &dns_cache_global->lru_list);
+    hlist_add_head(&entry->hash_node, &dns_cache_global->hash_table[hash]); // 框架ktypes.h宏
+    list_add(&entry->list, &dns_cache_global->lru_list); // 框架ktypes.h宏
     dns_cache_global->size++;
 
 #ifdef DNS_CACHE_LOCK_SPINLOCK
@@ -737,7 +694,6 @@ static long netopt_init(const char *args, const char *event, void *__user reserv
     err = hook_syscalln(__NR_sendto, 6, before_sendto, NULL, NULL);
     if (err) { pr_err("[NetOpt++] Hook sendto failed: %d\n", err); goto init_fail; }
 #ifdef __NR_getaddrinfo
-    err = hook_sys
     err = hook_syscalln(__NR_getaddrinfo, 6, NULL, after_getaddrinfo, NULL);
     if (err) { pr_err("[NetOpt++] Hook getaddrinfo failed: %d\n", err); goto init_fail; }
 #endif
