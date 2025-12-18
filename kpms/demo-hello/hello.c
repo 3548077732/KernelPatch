@@ -8,8 +8,7 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-// 核心修复1：删除 linux/tcp.h（框架未提供，且无直接依赖）
-#include <linux/sysctl.h>
+// 核心修复1：删除 linux/sysctl.h（框架接口无需内核头文件）
 #include <linux/limits.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
