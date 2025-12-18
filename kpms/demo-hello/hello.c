@@ -12,13 +12,18 @@
 #include <accctl.h>         // For set_priv_sel_allow and related functions
 #include <uapi/linux/limits.h>   // For PATH_MAX
 #include <linux/kernel.h>   // For snprintf
-#include <linux/path.h>     // 补充struct path定义
 #include <linux/sched.h>    // 补充struct task_struct定义（current依赖）
 
 // 补充pr_debug定义，避免隐式声明警告
 #ifndef pr_debug
 #define pr_debug(fmt, ...) pr_info("[DEBUG] " fmt, ##__VA_ARGS__)
 #endif
+
+// 兼容定义：避免依赖linux/path.h（部分编译环境无此头文件）
+struct path; // 前向声明，满足d_path函数参数要求
+
+// 内核d_path函数声明（部分环境可能未自动包含，显式声明避免隐式警告）
+extern char *d_path(const struct path *path, char *buf, size_t buflen);
 
 KPM_NAME("HMA++ Next");
 KPM_VERSION("1.5");
@@ -33,7 +38,6 @@ KPM_DESCRIPTION("核心风险拦截（白名单模式）");
 
 // 系统应用专属白名单（核心系统功能，全覆盖Android框架+厂商系统）
 static const char *system_app_allow_list[] = {
-    // 1. Android核心框架应用
     "android",                          // 系统核心进程
     "com.android.systemui",             // 系统UI
     "com.android.settings",             // 设置
@@ -84,7 +88,7 @@ static const char *system_app_allow_list[] = {
     "com.google.android.gms",           // Google Play服务
     "com.google.android.gsf",           // Google服务框架
     "com.google.android.webview",       // 系统WebView
-    // 2. 厂商系统应用（主流品牌兼容）
+    // 厂商系统应用（主流品牌兼容）
     "com.xiaomi.misettings",            // 小米设置
     "com.xiaomi.finddevice",            // 小米查找设备
     "com.huawei.systemmanager",         // 华为系统管家
@@ -98,7 +102,7 @@ static const char *system_app_allow_list[] = {
     "com.meizu.flyme.launcher",         // 魅族桌面
     "com.oneplus.launcher",             // 一加桌面
     "com.oneplus.settings",             // 一加设置
-    // 3. 系统工具类应用
+    // 系统工具类应用
     "com.android.tools",                // 系统工具集
     "com.android.shell",                // 系统Shell
     "com.android.updater",              // 系统更新
@@ -139,408 +143,23 @@ static const char *system_app_allow_list[] = {
     "com.android.providers.settings",   // 设置提供器
     "com.android.providers.telephony",  // 电话提供器
     "com.android.providers.media.module",// 媒体模块提供器
-    // 4. 系统核心服务应用
-    "com.android.server",               // 系统服务器
-    "com.android.service",              // 系统服务
-    "com.android.system",               // 系统核心
-    "com.android.framework",            // 框架服务
-    "com.android.runtime",              // 运行时服务
-    "com.android.art",                  // ART运行时
-    "com.android.package",              // 包管理服务
-    "com.android.install",              // 安装服务
-    "com.android.uninstall",            // 卸载服务
-    "com.android.update",               // 更新服务
-    "com.android.keystore",             // 密钥库服务
-    "com.android.securitytoken",        // 安全令牌服务
-    "com.android.encryption",           // 加密服务
-    "com.android.accountmanager",       // 账号管理服务
-    "com.android.auth",                 // 认证服务
-    "com.android.session",              // 会话服务
-    "com.android.cache",                // 缓存服务
-    "com.android.preferences",          // 偏好设置服务
-    "com.android.settingsprovider",     // 设置提供器
-    "com.android.systemprovider",       // 系统提供器
-    "com.android.dataprovider",         // 数据提供器
-    "com.android.infoprovider",         // 信息提供器
-    "com.android.contentprovider",      // 内容提供器
-    "com.android.mediaprovider",        // 媒体提供器
-    "com.android.locationprovider",     // 位置提供器
-    "com.android.geolocationprovider",  // 地理定位提供器
-    "com.android.gps",                  // GPS提供器
-    "com.android.wifilocationprovider", // WIFI定位提供器
-    "com.android.celllocationprovider", // 基站定位提供器
-    "com.android.locationmanager",      // 位置管理器
-    "com.android.networkprovider",      // 网络提供器
-    "com.android.socketprovider",       // 套接字提供器
-    "com.android.storageprovider",      // 存储提供器
-    "com.android.memoryprovider",       // 内存提供器
-    "com.android.diskprovider",         // 磁盘提供器
-    "com.android.partitionprovider",    // 分区提供器
-    "com.android.mountprovider",        // 挂载提供器
-    "com.android.backupprovider",       // 备份提供器
-    "com.android.restoreprovider",      // 恢复提供器
-    "com.android.syncprovider",         // 同步提供器
-    "com.android.securityprovider",     // 安全提供器
-    "com.android.encryptionprovider",   // 加密提供器
-    "com.android.decryptionprovider",   // 解密提供器
-    "com.android.vaultprovider",        // 保险箱提供器
-    "com.android.lockprovider",         // 锁定提供器
-    "com.android.unlockprovider",       // 解锁提供器
-    "com.android.passwordprovider",     // 密码提供器
-    "com.android.passcodeprovider",     // 密码提供器
-    "com.android.patternprovider",      // 图案提供器
-    "com.android.fingerprintprovider",  // 指纹提供器
-    "com.android.faceprovider",         // 面部提供器
-    "com.android.irisprovider",         // 虹膜提供器
-    "com.android.voiceprovider",        // 语音提供器
-    "com.android.soundprovider",        // 声音提供器
-    "com.android.audioprovider",        // 音频提供器
-    "com.android.videoprovider",        // 视频提供器
-    "com.android.cameraprovider",       // 相机提供器
-    "com.android.microphoneprovider",   // 麦克风提供器
-    "com.android.speakerprovider",      // 扬声器提供器
-    "com.android.headsetprovider",      // 耳机提供器
-    "com.android.bluetoothaudioprovider", // 蓝牙音频提供器
-    "com.android.usbaudioprovider",     // USB音频提供器
-    "com.android.hdaudioprovider",      // HD音频提供器
-    "com.android.dolbyaudioprovider",   // Dolby音频提供器
-    "com.android.equalizeprovider",     // 均衡器提供器
-    "com.android.bassboostprovider",    // 低音增强提供器
-    "com.android.virtualsurroundprovider", // 虚拟环绕提供器
-    "com.android.loudnessenhancerprovider", // 响度增强提供器
-    "com.android.noisereductionprovider", // 降噪提供器
-    "com.android.soundfxprovider",      // 音效提供器
-    "com.android.mediacodecprovider",   // 媒体编解码器提供器
-    "com.android.videocodecprovider",   // 视频编解码器提供器
-    "com.android.audiocodecprovider",   // 音频编解码器提供器
-    "com.android.hardwarecodecprovider", // 硬件编解码器提供器
-    "com.android.softwarecodecprovider", // 软件编解码器提供器
-    "com.android.mediadrmprovider",     // 媒体DRM提供器
-    "com.android.widevineprovider",     // Widevine DRM提供器
-    "com.android.playreadyprovider",    // PlayReady DRM提供器
-    "com.android.marlinprovider",       // Marlin DRM提供器
-    "com.android.clearkeyprovider",     // ClearKey DRM提供器
-    "com.android.drmprovider",          // DRM提供器
-    "com.android.mediascannerprovider", // 媒体扫描器提供器
-    "com.android.mediastoreprovider",   // 媒体存储提供器
-    "com.android.mediacontrollerprovider", // 媒体控制器提供器
-    "com.android.mediaplayerprovider",  // 媒体播放器提供器
-    "com.android.mediarecorderprovider", // 媒体录制器提供器
-    "com.android.mediamuxerprovider",   // 媒体混合器提供器
-    "com.android.mediaextractorprovider", // 媒体提取器提供器
-    // 5. 系统预装工具应用（用户常用）
-    "com.android.filemanager",          // 文件管理器
-    "com.android.downloadmanager",      // 下载管理器
-    "com.android.musicplayer",          // 音乐播放器
-    "com.android.videoplayer",          // 视频播放器
-    "com.android.gallery",              // 图库
-    "com.android.camera",               // 相机
-    "com.android.browser",              // 浏览器
-    "com.android.email",                // 邮件
-    "com.android.calendar",             // 日历
-    "com.android.contacts",             // 联系人
-    "com.android.phone",                // 电话
-    "com.android.sms",                  // 短信
-    "com.android.mms",                  // 彩信
-    "com.android.voicemail",            // 语音信箱
-    "com.android.callrecorder",         // 通话录音
-    "com.android.weather",              // 天气
-    "com.android.clock",                // 时钟
-    "com.android.calculator",           // 计算器
-    "com.android.notepad",              // 记事本
-    "com.android.notes",                // 笔记
-    "com.android.alarmclock",           // 闹钟
-    "com.android.stopwatch",            // 秒表
-    "com.android.timer",                // 计时器
-    "com.android.worldclock",           // 世界时钟
-    "com.android.translator",           // 翻译
-    "com.android.dictionary",           // 词典
-    "com.android.spellchecker",         // 拼写检查
-    "com.android.texttospeech",         // 文字转语音
-    "com.android.speachtotext",         // 语音转文字
-    "com.android.voicecommands",        // 语音命令
-    "com.android.voiceassistant",       // 语音助手
-    "com.android.accessibility",        // 无障碍
-    "com.android.magnification",        // 放大镜
-    "com.android.screenreader",         // 屏幕阅读器
-    "com.android.talkback",             // 语音反馈
-    "com.android.switchaccess",         // 切换控制
-    "com.android.selecttoSpeak",        // 选择朗读
-    "com.android.textcorrection",       // 文字校正
-    "com.android.autofill",             // 自动填充
-    "com.android.passwordmanager",      // 密码管理器
-    "com.android.vault",                // 保险箱
-    "com.android.filelock",             // 文件锁定
-    "com.android.applock",              // 应用锁定
-    "com.android.privacy",              // 隐私保护
-    "com.android.security",             // 安全中心
-    "com.android.virusscan",            // 病毒扫描
-    "com.android.malwareprotection",    // 恶意软件防护
-    "com.android.phishingprotection",   // 钓鱼防护
-    "com.android.spamfilter",           // 垃圾邮件过滤
-    "com.android.callfilter",           // 来电过滤
-    "com.android.smsfilter",            // 短信过滤
-    "com.android.appfilter",            // 应用过滤
-    "com.android.webfilter",            // 网页过滤
-    "com.android.contentfilter",        // 内容过滤
-    "com.android.parentalcontrols",     // 家长控制
-    "com.android.familylink",           // 家庭链接
-    "com.android.kidsmode",             // 儿童模式
-    "com.android.safemode",             // 安全模式
-    "com.android.restrictedprofile",     // 受限配置文件
-    "com.android.guestprofile",         // 访客配置文件
-    "com.android.userprofile",          // 用户配置文件
-    "com.android.multiusers",           // 多用户
-    "com.android.userManager",          // 用户管理器
-    "com.android.profilemanager",        // 配置文件管理器
-    "com.android.accountmanager",        // 账号管理器
-    "com.android.syncmanager",          // 同步管理器
-    "com.android.backupmanager",         // 备份管理器
-    "com.android.restoremanager",        // 恢复管理器
-    "com.android.updatemanager",         // 更新管理器
-    "com.android.installmanager",        // 安装管理器
-    "com.android.uninstallmanager",      // 卸载管理器
-    "com.android.packagemanager",        // 包管理器
-    "com.android.appmanager",            // 应用管理器
-    "com.android.processmanager",        // 进程管理器
-    "com.android.memorymanager",         // 内存管理器
-    "com.android.storage",              // 存储管理器
-    "com.android.diskmanager",          // 磁盘管理器
-    "com.android.partitionmanager",      // 分区管理器
-    "com.android.volumemanager",         // 音量管理器
-    "com.android.mountmanager",          // 挂载管理器
-    "com.android.unmountmanager",        // 卸载管理器
-    "com.android.formatmanager",         // 格式化管理器
-    "com.android.scanmanager",           // 扫描管理器
-    "com.android.defragmanager",         // 碎片整理管理器
-    "com.android.repairmanager",         // 修复管理器
-    "com.android.systemmanager",         // 系统管理器
-    "com.android.device",               // 设备管理器
-    "com.android.hardwaremanager",       // 硬件管理器
-    "com.android.sensormanager",         // 传感器管理器
-    "com.android.locationmanager",       // 位置管理器
-    "com.android.networkmanager",        // 网络管理器
-    "com.android.wifimanager",           // WIFI管理器
-    "com.android.bluetoothmanager",      // 蓝牙管理器
-    "com.android.nfcmanager",            // NFC管理器
-    "com.android.usbmanager",            // USB管理器
-    "com.android.batterymanager",        // 电池管理器
-    "com.android.powermanager",          // 电源管理器
-    "com.android.thermalmanger",         // 散热管理器
-    "com.android.performancemanager",    // 性能管理器
-    "com.android.powermanagement",       // 电源管理
-    "com.android.batterysaver",          // 省电模式
-    "com.android.lowpower",              // 低电量模式
-    "com.android.extendedbattery",       // 延长电池寿命
-    "com.android.batterycharging",       // 电池充电管理
-    "com.android.batterycalibration",    // 电池校准
-    "com.android.powersaving",           // 省电模式
-    "com.android.lowbattery",            // 低电量警告
-    "com.android.batteryoptimization",   // 电池优化
-    "com.android.powerconsumption",      // 电量消耗监控
-    "com.android.batterystats",          // 电池统计
-    "com.android.powerusage",            // 电量使用情况
-    "com.android.batteryhistory",        // 电池历史记录
-    "com.android.powerprofile",          // 电源配置文件
-    "com.android.batteryprofile",        // 电池配置文件
-    "com.android.powerscheme",           // 电源方案
-    "com.android.batteryscheme",         // 电池方案
-    "com.android.powerplan",             // 电源计划
-    "com.android.batteryplan",           // 电池计划
-    "com.android.powerpolicy",           // 电源策略
-    "com.android.batterypolicy",         // 电池策略
-    "com.android.powergovernor",         // 电源调节器
-    "com.android.batterygovernor",       // 电池调节器
-    "com.android.powercontroller",       // 电源控制器
-    "com.android.batterycontroller",     // 电池控制器
-    "com.android.powerdaemon",           // 电源守护进程
-    "com.android.batterydaemon",         // 电池守护进程
-    "com.android.powerservice",          // 电源服务
-    "com.android.batteryservice",        // 电池服务
-    "com.android.powerprovider",         // 电源提供器
-    "com.android.batteryprovider",       // 电池提供器
-    "com.android.powerwidget",           // 电源小部件
-    "com.android.batterywidget",         // 电池小部件
-    "com.android.powernotification",     // 电源通知
-    "com.android.batterynotification",   // 电池通知
-    "com.android.poweralert",            // 电源警报
-    "com.android.batteryalert",          // 电池警报
-    "com.android.powerwarning",          // 电源警告
-    "com.android.batterywarning",        // 电池警告
-    "com.android.powererror",            // 电源错误
-    "com.android.batteryerror",          // 电池错误
-    "com.android.powerexception",        // 电源异常
-    "com.android.batteryexception",      // 电池异常
-    "com.android.powercrash",            // 电源崩溃
-    "com.android.batterycrash",          // 电池崩溃
-    "com.android.powerfailure",          // 电源故障
-    "com.android.batteryfailure",        // 电池故障
-    "com.android.powerreset",            // 电源重置
-    "com.android.batteryreset",          // 电池重置
-    "com.android.powerrestart",          // 电源重启
-    "com.android.batteryrestart",        // 电池重启
-    "com.android.poweroff",              // 关机
-    "com.android.batteryoff",            // 电池关机
-    "com.android.poweron",               // 开机
-    "com.android.batteryon",             // 电池开机
-    "com.android.powercycle",            // 电源循环
-    "com.android.batterycycle",          // 电池循环
-    "com.android.powerstatus",           // 电源状态
-    "com.android.batterystatus",         // 电池状态
-    "com.android.powerlevel",            // 电源级别
-    "com.android.batterylevel",          // 电池级别
-    "com.android.powerpercentage",       // 电源百分比
-    "com.android.batterypercentage",     // 电池百分比
-    "com.android.powercapacity",         // 电源容量
-    "com.android.batterycapacity",       // 电池容量
-    "com.android.powerhealth",           // 电源健康
-    "com.android.batteryhealth",         // 电池健康
-    "com.android.powerstatusbar",        // 电源状态栏
-    "com.android.batterystatusbar",      // 电池状态栏
-    "com.android.powericon",             // 电源图标
-    "com.android.batteryicon",           // 电池图标
-    "com.android.powerindicator",        // 电源指示器
-    "com.android.batteryindicator",      // 电池指示器
-    "com.android.powerled",              // 电源LED
-    "com.android.batteryled",            // 电池LED
-    "com.android.powerlight",            // 电源灯
-    "com.android.batterylight",          // 电池灯
-    "com.android.powernotificationlight", // 电源通知灯
-    "com.android.batterynotificationlight", // 电池通知灯
-    "com.android.powerflashlight",       // 电源闪光灯
-    "com.android.batteryflashlight",     // 电池闪光灯
-    "com.android.powercameraflash",      // 电源相机闪光灯
-    "com.android.batterycameraflash",    // 电池相机闪光灯
-    "com.android.powertorch",            // 电源手电筒
-    "com.android.batterytorch",          // 电池手电筒
-    "com.android.powerflash",            // 电源闪光
-    "com.android.batteryflash",          // 电池闪光
-    "com.android.powerblink",            // 电源闪烁
-    "com.android.batteryblink",          // 电池闪烁
-    "com.android.powerpulse",            // 电源脉冲
-    "com.android.batterypulse",          // 电池脉冲
-    "com.android.powervibrate",          // 电源振动
-    "com.android.batteryvibrate",        // 电池振动
-    "com.android.powertone",             // 电源提示音
-    "com.android.batterytone",           // 电池提示音
-    "com.android.poweralerttone",        // 电源警报音
-    "com.android.batteryalerttone",      // 电池警报音
-    "com.android.powerwarningtone",      // 电源警告音
-    "com.android.batterywarningtone",    // 电池警告音
-    "com.android.powererrortone",        // 电源错误音
-    "com.android.batteryerrortone",      // 电池错误音
-    "com.android.powerexceptiontone",    // 电源异常音
-    "com.android.batteryexceptiontone",  // 电池异常音
-    "com.android.powercrashtone",        // 电源崩溃音
-    "com.android.batterycrashtone",      // 电池崩溃音
-    "com.android.powerfailuretone",      // 电源故障音
-    "com.android.batteryfailuretone",    // 电池故障音
-    "com.android.powerresettone",        // 电源重置音
-    "com.android.batteryresettone",      // 电池重置音
-    "com.android.powerrestarttone",      // 电源重启音
-    "com.android.batteryrestarttone",    // 电池重启音
-    "com.android.powerofftone",          // 关机音
-    "com.android.batteryofftone",        // 电池关机音
-    "com.android.powerontone",           // 开机音
-    "com.android.batterytone",           // 电池开机音
-    "com.android.powercycletone",        // 电源循环音
-    "com.android.batterycycletone",      // 电池循环音
-    "com.android.powerstatustone",       // 电源状态音
-    "com.android.batterystatustone",     // 电池状态音
-    "com.android.powerleveltone",        // 电源级别音
-    "com.android.batteryleveltone",      // 电池级别音
-    "com.android.powerpercentagetone",   // 电源百分比音
-    "com.android.batterypercentagetone", // 电池百分比音
-    "com.android.powercapacitytone",     // 电源容量音
-    "com.android.batterycapacitytone",   // 电池容量音
-    "com.android.powerhealthtone",       // 电源健康音
-    "com.android.batteryhealthtone",     // 电池健康音
-    "com.android.powerstatustbartone",   // 电源状态栏音
-    "com.android.batterystatustbartone", // 电池状态栏音
-    "com.android.powericontone",         // 电源图标音
-    "com.android.batteryicontone",       // 电池图标音
-    "com.android.powerindicatortone",    // 电源指示器音
-    "com.android.batteryindicatortone",  // 电池指示器音
-    "com.android.powerledtone",          // 电源LED音
-    "com.android.batteryledtone",        // 电池LED音
-    "com.android.powerlighttone",        // 电源灯音
-    "com.android.batterylighttone",      // 电池灯音
-    "com.android.powernotificationlighttone", // 电源通知灯音
-    "com.android.batterynotificationlighttone", // 电池通知灯音
-    "com.android.powerflashlighttone",    // 电源闪光灯音
-    "com.android.batteryflashlighttone",  // 电池闪光灯音
-    "com.android.powercameraflashtone",  // 电源相机闪光灯音
-    "com.android.batterycameraflashtone", // 电池相机闪光灯音
-    "com.android.powertorchtonetone",    // 电源手电筒音
-    "com.android.batterytorchtonetone",  // 电池手电筒音
-    "com.android.powerflashtone",        // 电源闪光音
-    "com.android.batteryflashtone",      // 电池闪光音
-    "com.android.powerblinktone",        // 电源闪烁音
-    "com.android.batteryblinktone",      // 电池闪烁音
-    "com.android.powerpulsestone",       // 电源脉冲音
-    "com.android.batterypulsestone",     // 电池脉冲音
-    "com.android.powervibratetone",      // 电源振动音
-    "com.android.batteryvibratetone",    // 电池振动音
-    "com.android.powertonealert",        // 电源提示音警报
-    "com.android.batterytonealert",      // 电池提示音警报
-    "com.android.poweralerttonealert",   // 电源警报音警报
-    "com.android.batteryalerttonealert", // 电池警报音警报
-    "com.android.powerwarningtonealert", // 电源警告音警报
-    "com.android.batterywarningtonealert", // 电池警告音警报
-    "com.android.powererrortonealert",   // 电源错误音警报
-    "com.android.batteryerrortonealert", // 电池错误音警报
-    "com.android.powerexceptiontonealert", // 电源异常音警报
-    "com.android.batteryexceptiontonealert", // 电池异常音警报
-    "com.android.powercrashtonealert",   // 电源崩溃音警报
-    "com.android.batterycrashtonealert", // 电池崩溃音警报
-    "com.android.powerfailuretonealert", // 电源故障音警报
-    "com.android.batteryfailuretonealert", // 电池故障音警报
-    "com.android.powerresettonealert",   // 电源重置音警报
-    "com.android.batteryresettonealert", // 电池重置音警报
-    "com.android.powerrestarttonealert", // 电源重启音警报
-    "com.android.batteryrestarttonealert", // 电池重启音警报
-    "com.android.powerofftonealert",     // 关机音警报
-    "com.android.batteryofftonealert",   // 电池关机音警报
-    "com.android.powerontonealert",      // 开机音警报
-    "com.android.batteryontonealert",    // 电池开机音警报
-    "com.android.powercycletonealert",   // 电源循环音警报
-    "com.android.batterycycletonealert", // 电池循环音警报
-    "com.android.powerstatustonealert",  // 电源状态音警报
-    "com.android.batterystatustonealert", // 电池状态音警报
-    "com.android.powerleveltonealert",   // 电源级别音警报
-    "com.android.batteryleveltonealert", // 电池级别音警报
-    "com.android.powerpercentagetonealert", // 电源百分比音警报
-    "com.android.batterypercentagetonealert", // 电池百分比音警报
-    "com.android.powercapacitytonealert", // 电源容量音警报
-    "com.android.batterycapacitytonealert", // 电池容量音警报
-    "com.android.powerhealthtonealert",  // 电源健康音警报
-    "com.android.batteryhealthtonealert", // 电池健康音警报
-    "com.android.powerstatustbartonealert", // 电源状态栏音警报
-    "com.android.batterystatustbartonealert", // 电池状态栏音警报
-    "com.android.powericontonealert",    // 电源图标音警报
-    "com.android.batteryicontonealert",  // 电池图标音警报
-    "com.android.powerindicatortonealert", // 电源指示器音警报
-    "com.android.batteryindicatortonealert", // 电池指示器音警报
-    "com.android.powerledtonealert",     // 电源LED音警报
-    "com.android.batteryledtonealert",   // 电池LED音警报
-    "com.android.powerlighttonealert",   // 电源灯音警报
-    "com.android.batterylighttonealert", // 电池灯音警报
-    "com.android.powernotificationlighttonealert", // 电源通知灯音警报
-    "com.android.batterynotificationlighttonealert", // 电池通知灯音警报
-    "com.android.powerflashlighttonealert", // 电源闪光灯音警报
-    "com.android.batteryflashlighttonealert", // 电池闪光灯音警报
-    "com.android.powercameraflashtonealert", // 电源相机闪光灯音警报
-    "com.android.batterycameraflashtonealert", // 电池相机闪光灯音警报
-    "com.android.powertorchtonetonealert", // 电源手电筒音警报
-    "com.android.batterytorchtonetonealert", // 电池手电筒音警报
-    "com.android.powerflashtonealert",   // 电源闪光音警报
-    "com.android.batteryflashtonealert", // 电池闪光音警报
-    "com.android.powerblinktonealert",   // 电源闪烁音警报
-    "com.android.batteryblinktonealert", // 电池闪烁音警报
-    "com.android.powerpulsestonealert",  // 电源脉冲音警报
-    "com.android.batterypulsestonealert", // 电池脉冲音警报
-    "com.android.powervibratetonealert", // 电源振动音警报
-    "com.android.batteryvibratetonealert"  // 电池振动音警报
+    // 常用第三方核心应用（补充）
+    "com.tencent.mm",          // 微信
+    "com.tencent.mobileqq",    // QQ
+    "com.tencent.minihd.qq",   // QQ轻量版
+    "com.tencent.wework",      // 企业微信
+    "com.eg.android.AlipayGphone", // 支付宝
+    "com.unionpay",            // 银联
+    "com.icbc.mobilebank",     // 工商银行
+    "com.ccb.ccbphone",        // 建设银行
+    "com.abchina.mobilebank",  // 农业银行
+    "com.cmbchina",            // 招商银行
+    "com.bankcomm",            // 交通银行
+    "com.spdb.mobilebank",     // 浦发银行
+    "com.hxb.android",         // 华夏银行
+    "com.cib.mobilebank",      // 兴业银行
+    "com.pingan.bank",         // 平安银行
+    "com.abcwealth.mobile"     // 农业银行财富版
 };
 #define SYSTEM_APP_ALLOW_LIST_SIZE (sizeof(system_app_allow_list)/sizeof(system_app_allow_list[0]))
 
@@ -662,24 +281,6 @@ static const char *third_party_allow_list[] = {
     "not.val.cheat",
     "com.haobammmm",
     "bin.mt.plus",
-    "com.tencent.mm",          // 微信
-    "com.tencent.mobileqq",    // QQ
-    "com.tencent.minihd.qq",   // QQ轻量版
-    "com.tencent.wework",      // 企业微信
-    // 常用银行软件
-    "com.icbc.mobilebank",     // 工商银行
-    "com.ccb.ccbphone",        // 建设银行
-    "com.abchina.mobilebank",  // 农业银行
-    "com.cmbchina.psbc",       // 邮储银行
-    "com.cmbchina",            // 招商银行
-    "com.bankcomm",            // 交通银行
-    "com.spdb.mobilebank",     // 浦发银行
-    "com.hxb.android",         // 华夏银行
-    "com.cib.mobilebank",      // 兴业银行
-    "com.pingan.bank",         // 平安银行
-    "com.abcwealth.mobile",    // 农业银行财富版
-    "com.eg.android.AlipayGphone", // 支付宝（金融类）
-    "com.unionpay",            // 银联
     "me.bmax.apatch",
     "com.larus.nova",
     "com.miui.home",
@@ -689,67 +290,29 @@ static const char *third_party_allow_list[] = {
 
 // 核心允许文件夹列表（仅允许这些文件夹操作，8大类合法场景）
 static const char *allow_folder_list[] = {
-    // 1.Hook/注入工具（合法开发场景）
-    "xposed_temp",
-    "lsposed_cache",
-    "hook_inject_data",
-    "xp_module_cache",
-    "lspatch_temp",
-    "hook_framework",
-    // 2.ROOT/系统工具（合法管理场景）
-    "magisk_temp",
-    "ksu_cache",
-    "system_modify",
-    "root_tool_data",
-    "kernel_mod_dir",
-    // 3.数据管理工具（合法隐私场景）
-    "privacy_steal",
-    "data_crack",
-    "info_collect",
-    "secret_monitor",
-    "data_leak_dir",
-    // 4.应用开发工具（合法调试场景）
-    "apk_modify",
-    "pirate_apk",
-    "app_cracked",
-    "patch_apk_dir",
-    "illegal_install",
-    // 5.终端/脚本工具（合法开发场景）
-    "termux_data",
-    "apktool_temp",
-    "reverse_engineer",
-    "hack_tool_data",
-    "shell_script",
-    // 6.模拟器/虚拟环境（合法测试场景）
-    "emulator_data",
-    "virtual_env",
-    "fake_device",
-    "emulator_cache",
-    // 7.插件/广告工具（合法使用场景）
-    "ad_plugin",
-    "malicious_plugin",
-    "plugin_hack",
-    "ad_inject",
-    // 8.临时操作文件夹（合法临时场景）
-    "risk_temp",
-    "malicious_dir",
-    "temp_hack",
-    "unsafe_cache"
+    "xposed_temp", "lsposed_cache", "hook_inject_data", "xp_module_cache", "lspatch_temp", "hook_framework",
+    "magisk_temp", "ksu_cache", "system_modify", "root_tool_data", "kernel_mod_dir",
+    "privacy_steal", "data_crack", "info_collect", "secret_monitor", "data_leak_dir",
+    "apk_modify", "pirate_apk", "app_cracked", "patch_apk_dir", "illegal_install",
+    "termux_data", "apktool_temp", "reverse_engineer", "hack_tool_data", "shell_script",
+    "emulator_data", "virtual_env", "fake_device", "emulator_cache",
+    "ad_plugin", "malicious_plugin", "plugin_hack", "ad_inject",
+    "risk_temp", "malicious_dir", "temp_hack", "unsafe_cache"
 };
 #define ALLOW_FOLDER_SIZE (sizeof(allow_folder_list)/sizeof(allow_folder_list[0]))
 
-// 判断当前进程是否为/system路径下的应用（修复版：使用内核标准函数，避免框架依赖）
+// 判断当前进程是否为/system路径下的应用（兼容版：移除linux/path.h依赖）
 static int is_system_path_app(void) {
     char exe_path[PATH_MAX];
     int ret;
 
-    // 安全校验：避免空指针引用
+    // 安全校验：避免空指针引用（current、mm、exe_file均可能为NULL）
     if (!current || !current->mm || !current->mm->exe_file) {
         return 0;
     }
 
-    // 内核标准方法：获取进程可执行文件路径（无需get_fs_path，直接用d_path）
-    ret = d_path(&current->mm->exe_file->f_path, exe_path, sizeof(exe_path));
+    // 直接调用d_path，依赖内核内部struct path定义（无需显式包含头文件）
+    ret = d_path((const struct path *)&current->mm->exe_file->f_path, exe_path, sizeof(exe_path));
     if (ret < 0 || ret >= sizeof(exe_path)) {
         return 0; // 路径获取失败，不视为系统应用
     }
@@ -777,7 +340,7 @@ static int is_blocked_path(const char *path) {
     }
     target_buf[i] = '\0';
     
-    // 1. 最高优先级：/system路径下的应用直接放行（无论包名是否在白名单）
+    // 1. 最高优先级：/system路径下的应用直接放行
     if (is_system_path_app()) {
         return 0;
     }
