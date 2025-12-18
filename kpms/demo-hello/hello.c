@@ -11,15 +11,12 @@
 #include <accctl.h>         // For set_priv_sel_allow and related functions
 #include <uapi/linux/limits.h>   // For PATH_MAX
 #include <linux/kernel.h>   // For snprintf
+#include <taskob.h>         // KernelPatch框架任务工具函数（替代直接结构体访问）
 
-// 补充必要的前向声明（完全不依赖asm/current.h）
-struct task_struct;  // 前向声明进程结构体
-struct mm_struct;    // 前向声明内存管理结构体
-struct file;         // 前向声明文件结构体
+// 补充必要的前向声明
 struct path;         // 前向声明路径结构体
 
-// 显式声明内核标准函数（替代current宏）
-extern struct task_struct *get_current(void);
+// 修正d_path函数原型（匹配内核实际定义）
 extern char *d_path(const struct path *path, char *buf, size_t buflen);
 
 // 补充pr_debug定义，避免隐式声明警告
@@ -303,39 +300,24 @@ static const char *allow_folder_list[] = {
 };
 #define ALLOW_FOLDER_SIZE (sizeof(allow_folder_list)/sizeof(allow_folder_list[0]))
 
-// 判断当前进程是否为/system路径下的应用（无current依赖版）
+// 判断当前进程是否为/system路径下的应用（框架适配版）
 static int is_system_path_app(void) {
     char exe_path[PATH_MAX];
-    int ret;
-    struct task_struct *task;
-    struct mm_struct *mm;
-    struct file *exe_file;
+    char *ret; // 修正：d_path返回char*，而非int
     struct path *f_path;
 
-    // 1. 使用内核标准函数get_current()获取当前进程（替代current宏）
-    task = get_current();
-    if (!task) return 0;
-
-    // 2. 通过偏移量访问mm成员（避免依赖结构体完整定义）
-    mm = *(struct mm_struct **)((char *)task + offsetof(struct task_struct, mm));
-    if (!mm) return 0;
-
-    // 3. 通过偏移量访问exe_file成员
-    exe_file = *(struct file **)((char *)mm + offsetof(struct mm_struct, exe_file));
-    if (!exe_file) return 0;
-
-    // 4. 通过偏移量访问f_path成员
-    f_path = (struct path *)((char *)exe_file + offsetof(struct file, f_path));
+    // 1. 使用KernelPatch框架taskob函数获取当前进程可执行文件路径（避免直接访问结构体）
+    f_path = taskob_get_exe_path(get_current());
     if (!f_path) return 0;
 
-    // 5. 调用d_path获取进程可执行文件路径
+    // 2. 调用d_path转换路径（修正返回值类型）
     ret = d_path(f_path, exe_path, sizeof(exe_path));
-    if (ret < 0 || ret >= sizeof(exe_path)) {
+    if (!ret || (ret - exe_path) < 0 || (ret - exe_path) >= sizeof(exe_path)) {
         return 0; // 路径获取失败，不视为系统应用
     }
-    exe_path[ret] = '\0'; // 正确终止字符串
+    exe_path[ret - exe_path] = '\0'; // 正确终止字符串（d_path返回指向buf的指针）
 
-    // 6. 判断路径是否以/system/开头（覆盖所有系统目录）
+    // 3. 判断路径是否以/system/开头
     if (strncmp(exe_path, SYSTEM_PATH_PREFIX, SYSTEM_PATH_LEN) == 0) {
         pr_debug("[HMA++]Allow system path app: %s\n", exe_path);
         return 1;
