@@ -9,7 +9,9 @@
 #include <asm/current.h>
 #include <linux/fs.h>
 #include <linux/errno.h>
-#include <linux/socket.h>
+// 修复：替换 <linux/socket.h> 为架构无关的头文件组合
+#include <uapi/linux/socket.h>
+#include <linux/net.h>
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/tcp.h>
@@ -22,6 +24,9 @@
 #include <linux/jiffies.h>
 #include <linux/time.h>
 #include <netdb.h>
+// 修复：添加架构适配的asm头文件（KernelPatch框架通用路径）
+#include <asm-generic/socket.h>
+#include <asm-generic/errno.h>
 
 // 模块元信息
 KPM_NAME("NetOpt++");
@@ -361,10 +366,15 @@ static int dns_cache_add(const char *domain, const void *addr, int family) {
 static int tcp_optimize_init(void) {
     int ret = 0;
 
-    // 1. 设置TCP拥塞控制算法
-    ret = tcp_set_congestion_control(TCP_CONGESTION_ALG);
+    // 1. 设置TCP拥塞控制算法（兼容KernelPatch框架的sysctl接口）
+#ifdef CONFIG_TCP_CONG_BBR
+    ret = sysctl_set_str("net.ipv4.tcp_congestion_control", TCP_CONGESTION_ALG);
+#else
+    pr_warn("[NetOpt++] BBR congestion control not supported, using cubic\n");
+    ret = sysctl_set_str("net.ipv4.tcp_congestion_control", "cubic");
+#endif
     if (ret) {
-        pr_err("[NetOpt++] Failed to set congestion control to %s: %d\n", TCP_CONGESTION_ALG, ret);
+        pr_err("[NetOpt++] Failed to set congestion control: %d\n", ret);
         return ret;
     }
 
@@ -398,7 +408,7 @@ static int tcp_optimize_init(void) {
 
 static void tcp_optimize_restore(void) {
     // 恢复默认拥塞控制算法（cubic为多数内核默认）
-    tcp_set_congestion_control("cubic");
+    sysctl_set_str("net.ipv4.tcp_congestion_control", "cubic");
     // 恢复TCP快速打开默认值
     sysctl_set_int("net.ipv4.tcp_fastopen", 0);
     pr_info("[NetOpt++] TCP parameters restored to default\n");
@@ -508,12 +518,12 @@ static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
     struct dns_cache_entry *cache_entry = dns_cache_lookup(domain, hints_kernel.ai_family);
     if (cache_entry) {
         // 缓存命中，直接构造addrinfo返回给用户空间，跳过原结果
-        struct addrinfo ai_kernel, *ai_user;
+        struct addrinfo ai_kernel;
         struct sockaddr_in sin_kernel;
-        size_t ai_size = sizeof(struct addrinfo) + sizeof(struct sockaddr_in);
+        size_t ai_total_size = sizeof(struct addrinfo) + sizeof(struct sockaddr_in);
 
-        // 分配用户空间内存（用于存储addrinfo和sockaddr）
-        ai_user = (struct addrinfo __user *)__get_free_user_pages(GFP_KERNEL, 0, 0);
+        // 分配用户空间内存（使用KernelPatch框架兼容的内存分配接口）
+        struct addrinfo __user *ai_user = (struct addrinfo __user *)kp_alloc_user(ai_total_size);
         if (!ai_user) return;
 
         // 构造addrinfo结构
@@ -532,7 +542,8 @@ static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
         if (hints_kernel.ai_family == AF_INET) {
             sin_kernel.sin_addr = cache_entry->addr.ipv4;
         } else {
-            // IPv6需调整结构，此处简化处理（完整实现需用sockaddr_in6）
+            // IPv6需单独处理sockaddr_in6，此处简化适配（避免编译错误）
+            kp_free_user(ai_user);
             return;
         }
         // 端口由service指定，若未指定则设为0
@@ -544,16 +555,16 @@ static void after_getaddrinfo(hook_fargs6_t *args, void *udata) {
             }
         }
 
-        // 拷贝到用户空间
+        // 拷贝到用户空间（避免内存访问越界）
         if (copy_to_user(ai_user, &ai_kernel, sizeof(struct addrinfo)) ||
             copy_to_user(ai_kernel.ai_addr, &sin_kernel, sizeof(struct sockaddr_in))) {
-            free_user_pages((unsigned long)ai_user, 1);
+            kp_free_user(ai_user);
             return;
         }
 
         // 更新用户空间的res指针
         if (put_user((unsigned long)ai_user, (unsigned long __user *)res)) {
-            free_user_pages((unsigned long)ai_user, 1);
+            kp_free_user(ai_user);
             return;
         }
 
