@@ -17,9 +17,9 @@ KPM_NAME("HMA++ Next");
 KPM_VERSION("1.1.5");
 KPM_LICENSE("GPLv3");
 KPM_AUTHOR("NightFallsLikeRain");
-KPM_DESCRIPTION("核心风险拦截（白名单模式）");
+KPM_DESCRIPTION("核心风险拦截（白名单模式）测试");
 
-#define TARGET_PATH "/storage/emulated/0/Android/data/"
+#define TARGET_PATH "/data/data/"
 #define TARGET_PATH_LEN (sizeof(TARGET_PATH) - 1)
 
 // 内置 allow list（白名单包名，仅允许这些应用操作目标路径）
