@@ -1,5 +1,5 @@
 ifndef TARGET_COMPILE
-    $(error TARGET_COMPILE not set)
+    TARGET_COMPILE=/root/other/ndk/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin
 endif
 
 TARGET=kpimg
@@ -11,16 +11,18 @@ OBJCOPY = $(TARGET_COMPILE)objcopy
 
 CFLAGS += -Wall -fno-builtin -std=gnu11 -nostdinc -mgeneral-regs-only
 CFLAGS += -g
+CFLAGS += -Wno-unused-function -Wno-return-type -Wno-c23-extensions -Wno-uninitialized
+CFLAGS += -fno-PIC -fno-asynchronous-unwind-tables -fno-stack-protector -fno-unwind-tables -fno-semantic-interposition -U_FORTIFY_SOURCE -fno-common
 
 ifdef DEBUG
 	CFLAGS += -DDEBUG -DMAP_DEBUG -g
 endif
 
-ifdef ANDROID
+# ifdef ANDROID
 	CFLAGS += -DANDROID
-endif
+# endif
 
-INCLUDE := -I. -Iinclude -Ipatch/include -Ilinux -Ilinux/include -Ilinux/arch/arm64/include -Ilinux/tools/arch/arm64/include
+INCLUDE := -I. -Iinclude -Ipatch/include -Ilinux -Ilinux/include -Ilinux/arch/arm64/include -Ilinux/tools/arch/arm64/include -Ikernel-source -I$(TARGET_COMPILE)/../sysroot/usr/include -I$(TARGET_COMPILE)/../sysroot/usr/include/aarch64-linux-android
 
 BASE_SRCS += base/setup.c 
 BASE_SRCS += base/setup1.S
@@ -42,9 +44,10 @@ BASE_SRCS += $(wildcard patch/common/*.c)
 BASE_SRCS += $(wildcard patch/module/*.c)
 BASE_SRCS += $(wildcard patch/ksyms/*.c)
 
-ifdef ANDROID
-	BASE_SRCS += $(wildcard patch/android/*.c)
-endif
+BASE_SRCS += patch/android/sepolicy_flags.c
+
+BASE_SRCS += $(wildcard patch/sukisu/*.c)
+
 
 SRCS += $(BASE_SRCS)
 SRCS += $(LINUX_SRCS)
@@ -52,13 +55,16 @@ SRCS += $(LINUX_SRCS)
 OBJS := $(SRCS:.c=.o)
 OBJS := $(OBJS:.S=.o)
 
-all: hdr ${TARGET}
+
+LDFLAGS += -Tkpimg.lds --no-relax
+
+all: ${TARGET}
 
 ${TARGET}: ${TARGET}.elf
 	${OBJCOPY} -O binary -S $^ $@
 
 ${TARGET}.elf: ${OBJS}
-	${LD} -nostdlib -static -no-pie -Tkpimg.lds -o $@ $^
+	${LD} -nostdlib -static -no-pie -Tkpimg.lds -e start -o $@ $^
 
 %.o: %.c
 	${CC} $(CFLAGS) $(INCLUDE) -c -O2 -o $@ $<
@@ -68,12 +74,6 @@ base/sha256.o: base/sha256.c
 
 %.o: %.S
 	${CC} $(CFLAGS) $(INCLUDE) -c -o $@ $<
-
-.PHONY: hdr
-hdr:
-	cp -Rf patch/include/uapi ../user/
-	cp -f ../version ../user/
-	cp -f include/preset.h ../tools/
 
 .PHONY: clean
 clean:
