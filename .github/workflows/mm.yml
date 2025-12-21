@@ -15,6 +15,7 @@ jobs:
         with:
           submodules: "recursive"
           fetch-depth: 0
+      
       - name: Generate version
         id: parse_version
         run: |
@@ -24,46 +25,49 @@ jobs:
           VERSION="$MAJOR.$MINOR.$PATCH"
           echo "Generated Version: $VERSION"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+      
       - name: Install required packages
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev flex bison
+      
       - name: Install Compiler
         run: |
           curl -o arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf.tar.xz https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf.tar.xz
           tar -Jxf arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf.tar.xz
+      
       - name: Build kpimg
         run: |
-          export TARGET_COMPILE=`pwd`/arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf/bin/aarch64-none-elf-
+          export TARGET_COMPILE=$(pwd)/arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf/bin/aarch64-none-elf-
           cd kernel
-
+          
           export ANDROID=1
           make
           mv kpimg kpimg-android
           mv kpimg.elf kpimg.elf-android
           make clean
-
+          
           unset ANDROID
           make
           mv kpimg kpimg-linux
           mv kpimg.elf kpimg.elf-linux
           make clean
-
+          
           cd ..
           cd kpms
-
+          
           cd demo-hello
           make
           mv hello.kpm demo-hello.kpm
-
+          
           cd ../demo-inlinehook
           make
           mv inlinehook.kpm demo-inlinehook.kpm
-
+          
           cd ../demo-syscallhook
           make
           mv syscallhook.kpm demo-syscallhook.kpm
-
+          
           # 编译网络优化模块（使用现有的 hello.c 文件）
           cd ../hello
           # 确保 Makefile 存在，如果不存在则创建
@@ -93,7 +97,7 @@ EOF
           fi
           make
           mv hello.kpm demo-network-optimizer.kpm
-
+      
       - name: Upload elf
         uses: actions/upload-artifact@v4
         with:
@@ -101,7 +105,7 @@ EOF
             kernel/kpimg.elf-linux
             kernel/kpimg.elf-android
           name: kpimg.elf
-
+      
       - name: Release
         uses: ncipollo/release-action@v1.14.0
         with:
@@ -125,6 +129,7 @@ EOF
     steps:
       - name: Check out
         uses: actions/checkout@v4
+      
       - name: Generate version
         id: parse_version
         run: |
@@ -134,7 +139,7 @@ EOF
           VERSION="$MAJOR.$MINOR.$PATCH"
           echo "Generated Version: $VERSION"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
+      
       - name: Zip-lib
         run: |
           export TARGET_COMPILE=placeholder
@@ -142,7 +147,7 @@ EOF
           make hdr
           cd ..
           zip -r kpuser.zip user
-
+      
       - name: Release
         uses: ncipollo/release-action@v1.14.0
         with:
@@ -163,6 +168,7 @@ EOF
         with:
           submodules: "recursive"
           fetch-depth: 0
+      
       - name: Generate version
         id: parse_version
         run: |
@@ -172,20 +178,20 @@ EOF
           VERSION="$MAJOR.$MINOR.$PATCH"
           echo "Generated Version: $VERSION"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
+      
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
           ndk-version: r26b
           add-to-path: true
-
+      
       - name: Make hdr
         run: |
           export TARGET_COMPILE=placeholder
           cd kernel
           make hdr
-
+      
       - name: Build kptools-android
         run: |
           cd tools
@@ -198,7 +204,7 @@ EOF
             -DANDROID_ABI=arm64-v8a ../..
           cmake --build .
           mv kptools kptools-android
-
+      
       - name: Release
         uses: ncipollo/release-action@v1.14.0
         with:
@@ -216,6 +222,7 @@ EOF
     steps:
       - name: Check out
         uses: actions/checkout@v4
+      
       - name: Generate version
         id: parse_version
         run: |
@@ -225,18 +232,18 @@ EOF
           VERSION="$MAJOR.$MINOR.$PATCH"
           echo "Generated Version: $VERSION"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
+      
       - name: Install Linux headers
         run: |
           sudo apt-get update
           sudo apt-get install -y linux-headers-$(uname -r) build-essential libssl-dev flex bison
-
+      
       - name: Make hdr
         run: |
           export TARGET_COMPILE=placeholder
           cd kernel
           make hdr
-
+      
       - name: Build kptools
         run: |
           export ANDROID=1
@@ -245,7 +252,7 @@ EOF
           cmake ..
           make
           mv kptools kptools-linux
-
+      
       - name: Release
         uses: ncipollo/release-action@v1.14.0
         with:
@@ -263,6 +270,7 @@ EOF
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+      
       - name: Generate version
         shell: pwsh
         run: |
@@ -273,6 +281,7 @@ EOF
           Write-Output "Generated Version: $VERSION"
           "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
           Add-Content -Path $env:GITHUB_OUTPUT -Value "VERSION=$VERSION"
+      
       - uses: msys2/setup-msys2@v2
         with:
           update: true
@@ -285,21 +294,24 @@ EOF
             msys/flex
             msys/bison
             msys/openssl-devel
+      
       - name: Copyfile
         shell: pwsh
         run: |
           cp .\kernel\include\preset.h .\tools\
           cd tools
+      
       - name: build
         shell: cmd
         run: |
           cd tools
           msys2 -c 'make'
+      
       - name: Showinfo
         shell: cmd
         run: |
           ls D:\a\_temp\
-
+      
       - name: Copyfile2
         shell: pwsh
         run: |
@@ -307,7 +319,8 @@ EOF
           cp .\tools\kptools.exe .\win\kptools-msys2.exe
           cp D:\a\_temp\msys64\usr\bin\msys-2.0.dll .\win
           cp D:\a\_temp\msys64\usr\bin\msys-z.dll .\win
-          7z a kptools-msys2-win .\win 
+          7z a kptools-msys2-win .\win
+      
       - name: Release
         uses: ncipollo/release-action@v1.12.0
         with:
@@ -325,6 +338,7 @@ EOF
     steps:
       - name: Check out
         uses: actions/checkout@v4
+      
       - name: Generate version
         id: parse_version
         run: |
@@ -334,7 +348,7 @@ EOF
           VERSION="$MAJOR.$MINOR.$PATCH"
           echo "Generated Version: $VERSION"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
+      
       - name: Install dependencies on macOS
         run: |
           brew install flex bison openssl
@@ -342,13 +356,13 @@ EOF
           export PATH="/usr/local/opt/bison/bin:$PATH"
           export LDFLAGS="-L/usr/local/opt/openssl/lib"
           export CPPFLAGS="-I/usr/local/opt/openssl/include"
-
+      
       - name: Make hdr
         run: |
           export TARGET_COMPILE=placeholder
           cd kernel
           make hdr
-
+      
       - name: Build kptools
         run: |
           export ANDROID=1
@@ -357,6 +371,7 @@ EOF
           cmake ..
           make
           mv kptools kptools-mac
+      
       - name: Release
         uses: ncipollo/release-action@v1.14.0
         with:
@@ -377,10 +392,12 @@ EOF
         with:
           name: kpimg.elf
           path: ./artifacts
+      
       - name: List artifacts
         run: |
           echo "Available artifacts:"
           ls -la ./artifacts/
+      
       - name: Check network module compilation
         run: |
           echo "Checking if network optimization module was compiled..."
