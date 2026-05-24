@@ -76,6 +76,6 @@ example:
 
 ```shell
 export TARGET_COMPILE=aarch64-none-elf-
-cd kpm-demo/hello
+cd kpms/demo-hello
 make
 ```

@@ -20,6 +20,7 @@
 #include "tlsf.h"
 #include "hmem.h"
 #include "setup.h"
+#include "symbol_lookup_scan.h"
 
 #define bits(n, high, low) (((n) << (63u - (high))) >> (63u - (high) + (low)))
 #define align_floor(x, align) ((uint64_t)(x) & ~((uint64_t)(align) - 1))
@@ -33,6 +34,10 @@ KP_EXPORT_SYMBOL(setup_header);
 int (*kallsyms_on_each_symbol)(int (*fn)(void *data, const char *name, struct module *module, unsigned long addr),
                                void *data) = 0;
 KP_EXPORT_SYMBOL(kallsyms_on_each_symbol);
+
+typedef int (*kallsyms_on_each_symbol_nomod_t)(int (*fn)(void *, const char *, unsigned long), void *data);
+typedef int (*kallsyms_on_each_match_symbol_t)(int (*fn)(void *, unsigned long), const char *name, void *data);
+static kallsyms_on_each_match_symbol_t kernel_kallsyms_on_each_match_symbol = 0;
 
 unsigned long (*kallsyms_lookup_name)(const char *name) = 0;
 KP_EXPORT_SYMBOL(kallsyms_lookup_name);
@@ -65,6 +70,92 @@ KP_EXPORT_SYMBOL(kpver);
 
 endian_t endian = little;
 KP_EXPORT_SYMBOL(endian);
+
+struct kallsyms_match_symbol_context
+{
+    int (*fn)(void *, unsigned long);
+    const char *name;
+    void *data;
+};
+
+#if 0
+static unsigned long resolve_kallsyms_lookup_name_by_backward_symbol_scan(unsigned long anchor_offset)
+{
+    char buf[256];
+    unsigned long addr;
+    unsigned long offset;
+    unsigned long size;
+    unsigned long anchor_addr;
+    kernel_sprintf_t kernel_sprintf;
+
+    if (!anchor_offset || !start_preset.sprintf_offset) return 0;
+
+    anchor_addr = kernel_va + anchor_offset;
+    if (anchor_addr < kernel_va + 4) return 0;
+
+    kernel_sprintf = (kernel_sprintf_t)(kernel_va + start_preset.sprintf_offset);
+    addr = anchor_addr - 4;
+
+    for (int i = 0; i < 4096 && addr > kernel_va; i++) {
+        kernel_sprintf(buf, "%pSb", (void *)addr);
+        if (!kp_symbol_scan_parse_info(buf, &offset, &size) || !offset || offset > addr - kernel_va) break;
+        if (!kp_symbol_scan_strcmp(buf, "kallsyms_lookup_name")) {
+            return addr - offset - kernel_va;
+        }
+        addr -= offset + 4;
+    }
+    return 0;
+}
+#endif
+
+static unsigned long resolve_kallsyms_lookup_name_by_symbol_lookup_anchor()
+{
+    return kp_resolve_symbol_by_lookup_anchor(kernel_va, kernel_size, start_preset.sprintf_offset,
+                                              start_preset.symbol_lookup_anchor_offset, "kallsyms_lookup_name");
+}
+
+static void log_kallsyms_lookup_name_unresolved()
+{
+    if (printk) {
+        printk("KP failed to resolve kallsyms_lookup_name via symbol scan or preset\n");
+    }
+}
+
+static int kallsyms_on_each_match_symbol_cb(void *data, const char *name, struct module *unused_mod,
+                                            unsigned long addr)
+{
+    struct kallsyms_match_symbol_context *ctx = data;
+
+    (void)unused_mod;
+    if (kp_symbol_scan_strcmp(name, ctx->name)) return 0;
+    return ctx->fn(ctx->data, addr);
+}
+
+static int kallsyms_on_each_match_symbol_cb_nomod(void *data, const char *name, unsigned long addr)
+{
+    struct kallsyms_match_symbol_context *ctx = data;
+
+    if (kp_symbol_scan_strcmp(name, ctx->name)) return 0;
+    return ctx->fn(ctx->data, addr);
+}
+
+int kallsyms_on_each_match_symbol(int (*fn)(void *, unsigned long), const char *name, void *data)
+{
+    struct kallsyms_match_symbol_context ctx = { .fn = fn, .name = name, .data = data };
+
+    if (unlikely(!fn || !name)) return 0;
+    if (likely(kernel_kallsyms_on_each_match_symbol)) {
+        return kernel_kallsyms_on_each_match_symbol(fn, name, data);
+    }
+    if (unlikely(!kallsyms_on_each_symbol)) return 0;
+    if (kver <= VERSION(6, 1, 0)) {
+        return kallsyms_on_each_symbol(kallsyms_on_each_match_symbol_cb, &ctx);
+    }
+    kallsyms_on_each_symbol_nomod_t kallsyms_on_each_symbol_nomod =
+        (kallsyms_on_each_symbol_nomod_t)kallsyms_on_each_symbol;
+    return kallsyms_on_each_symbol_nomod(kallsyms_on_each_match_symbol_cb_nomod, &ctx);
+}
+KP_EXPORT_SYMBOL(kallsyms_on_each_match_symbol);
 
 uint64_t _kp_extra_start = 0;
 uint64_t _kp_extra_end = 0;
@@ -143,7 +234,6 @@ uint64_t *pgtable_entry(uint64_t pgd, uint64_t va)
         uint64_t pxd_shift = (page_shift - 3) * (4 - lv) + 3;
         uint64_t pxd_index = (va >> pxd_shift) & (pxd_ptrs - 1);
         pxd_entry_va = pxd_va + pxd_index * 8;
-        if (!pxd_entry_va) return 0;
         uint64_t pxd_desc = *((uint64_t *)pxd_entry_va);
         if ((pxd_desc & 0b11) == 0b11) { // table
             pxd_pa = pxd_desc & (((1ul << (48 - page_shift)) - 1) << page_shift);
@@ -174,24 +264,34 @@ uint64_t *pgtable_entry(uint64_t pgd, uint64_t va)
 }
 KP_EXPORT_SYMBOL(pgtable_entry);
 
-void modify_entry_kernel(uint64_t va, uint64_t *entry, uint64_t value)
+uint64_t pgtable_phys(uint64_t pgd, uint64_t va)
 {
-    if (!pte_valid_cont(*entry) && !pte_valid_cont(value)) {
-        *entry = value;
-        flush_tlb_kernel_page(va);
-        return;
+    uint64_t pxd_bits = page_shift - 3;
+    uint64_t pxd_ptrs = 1u << pxd_bits;
+    uint64_t pxd_pa = 0;
+    uint64_t pxd_va = pgd;
+    __flush_dcache_area((void *)pxd_va, page_size);
+    for (int64_t lv = 4 - page_level; lv < 4; ++lv) {
+        uint64_t pxd_shift = pxd_bits * (4 - lv) + 3;
+        uint64_t pxd_index = (va >> pxd_shift) & (pxd_ptrs - 1);
+        uint64_t pxd_desc = ((uint64_t *)pxd_va)[pxd_index];
+        uint8_t valid_table = pxd_desc & 0b11;
+        if (valid_table == 0b11) {
+            pxd_pa = pxd_desc & (((1ul << (48 - page_shift)) - 1) << page_shift);
+        } else if (valid_table == 0b01) {
+            uint64_t bits = (3 - lv) * pxd_bits;
+            uint64_t block_bits = bits + page_shift;
+            pxd_pa = (pxd_desc & (((1ul << (48 - block_bits)) - 1) << block_bits)) +
+                     (va & (((1ul << bits) - 1) << page_shift));
+            break;
+        } else {
+            return 0;
+        }
+        pxd_va = phys_to_virt(pxd_pa);
     }
-
-    uint64_t table_pa_mask = (((1ul << (48 - page_shift)) - 1) << page_shift);
-    uint64_t prot = value & ~table_pa_mask;
-    uint64_t *p = (uint64_t *)((uintptr_t)entry & ~(sizeof(entry) * CONT_PTES - 1));
-    for (int i = 0; i < CONT_PTES; ++i, ++p)
-        *p = (*p & table_pa_mask) | prot;
-
-    *entry = value;
-    va &= CONT_PTE_MASK;
-    flush_tlb_kernel_range(va, va + CONT_PTES * page_size);
+    return pxd_pa ? pxd_pa + (va & (page_size - 1)) : 0;
 }
+KP_EXPORT_SYMBOL(pgtable_phys);
 
 static void prot_myself()
 {
@@ -393,8 +493,11 @@ static void log_regs()
     // log_reg(PMSIDR_EL1); //       | R   [4] | Sampling Profiling ID Register
 }
 
-static void start_init(uint64_t kimage_voff, uint64_t linear_voff)
+static int start_init(uint64_t kimage_voff, uint64_t linear_voff)
 {
+    unsigned long kallsym_offset = 0;
+    const char *kallsyms_resolver = "preset";
+
     kimage_voffset = kimage_voff;
     linear_voffset = linear_voff;
 
@@ -403,13 +506,48 @@ static void start_init(uint64_t kimage_voff, uint64_t linear_voff)
     kernel_size = start_preset.kernel_size;
     runtime_base_addr = (uint64_t)_link_base;
 
-    uint64_t kallsym_addr = kernel_va + start_preset.kallsyms_lookup_name_offset;
-    kallsyms_lookup_name = (typeof(kallsyms_lookup_name))(kallsym_addr);
+    if (start_preset.patch_config.printk) {
+        printk = (typeof(printk))(kernel_va + start_preset.patch_config.printk);
+    }
+
+#if 0
+    kallsym_offset = resolve_kallsyms_lookup_name_by_backward_symbol_scan(start_preset.symbol_lookup_anchor_offset);
+    if (kallsym_offset) {
+        kallsyms_resolver = "backward_symbol_scan";
+    }
+#endif
+    if (!kallsym_offset) {
+        kallsym_offset = resolve_kallsyms_lookup_name_by_symbol_lookup_anchor();
+        if (kallsym_offset) {
+            kallsyms_resolver = "symbol_lookup_anchor";
+        }
+    }
+    if (!kallsym_offset) {
+        kallsym_offset = start_preset.kallsyms_lookup_name_offset;
+    }
+    if (!kallsym_offset) {
+        log_kallsyms_lookup_name_unresolved();
+        return -1;
+    }
+
+    start_preset.kallsyms_lookup_name_offset = kallsym_offset;
+    kallsyms_lookup_name = (typeof(kallsyms_lookup_name))(kernel_va + kallsym_offset);
+    if (!kallsyms_lookup_name) {
+        log_kallsyms_lookup_name_unresolved();
+        return -1;
+    }
     kernel_stext_va = kallsyms_lookup_name("_stext");
     printk = (typeof(printk))kallsyms_lookup_name("printk");
     if (!printk) printk = (typeof(printk))kallsyms_lookup_name("_printk");
+    if (!printk) {
+        return -1;
+    }
 
     vsnprintf = (typeof(vsnprintf))kallsyms_lookup_name("vsnprintf");
+    if (!vsnprintf) {
+        printk("KP failed to resolve vsnprintf\n");
+        return -1;
+    }
 
     log_boot(KERNEL_PATCH_BANNER);
 
@@ -425,11 +563,15 @@ static void start_init(uint64_t kimage_voff, uint64_t linear_voff)
     log_boot("Kernel Version: %x\n", kver);
     log_boot("KernelPatch Version: %x\n", kpver);
     log_boot("KernelPatch Config: %llx\n", setup_header->config_flags);
-    log_boot("KernelPatch Compile Time: %s\n", (uint64_t)setup_header->compile_time);
+    log_boot("KernelPatch Compile Time: %s\n", setup_header->compile_time);
+    log_boot("kallsyms_lookup_name offset: %llx (%s)\n", (uint64_t)start_preset.kallsyms_lookup_name_offset,
+             kallsyms_resolver);
 
     log_boot("KernelPatch link base: %llx, runtime base: %llx\n", link_base_addr, runtime_base_addr);
 
     kallsyms_on_each_symbol = (typeof(kallsyms_on_each_symbol))kallsyms_lookup_name("kallsyms_on_each_symbol");
+    kernel_kallsyms_on_each_match_symbol =
+        (typeof(kernel_kallsyms_on_each_match_symbol))kallsyms_lookup_name("kallsyms_on_each_match_symbol");
 
     uint64_t tcr_el1;
     asm volatile("mrs %0, tcr_el1" : "=r"(tcr_el1));
@@ -453,6 +595,7 @@ static void start_init(uint64_t kimage_voff, uint64_t linear_voff)
     uint64_t page_size_mask = ~(page_size - 1);
     pgd_pa = baddr & page_size_mask;
     pgd_va = phys_to_virt(pgd_pa);
+    return 0;
 }
 
 void symbol_init();
@@ -461,7 +604,8 @@ int patch();
 int __attribute__((section(".start.text"))) __noinline start(uint64_t kimage_voff, uint64_t linear_voff)
 {
     int rc = 0;
-    start_init(kimage_voff, linear_voff);
+    rc = start_init(kimage_voff, linear_voff);
+    if (rc) return rc;
     prot_myself();
     restore_map();
     log_regs();
